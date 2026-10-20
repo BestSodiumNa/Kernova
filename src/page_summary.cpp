@@ -317,12 +317,13 @@ private:
         std::vector<ListCard::Line> sys = {
             {L"Device", computer_},
             {L"Windows", windows_},
-            {L"Processor", CpuBrandName()},
+            {L"Processor", CpuBrandName() + (s.cpuTemp.c < 0 ? L"" : L"  ·  " + CpuTempText(s.cpuTemp))},
         };
         // Every GPU (dedicated first), e.g. an RTX laptop GPU plus the CPU's integrated graphics.
         for (const auto& g : s.gpus)
             sys.push_back({g.integrated ? L"Integrated GPU" : L"Dedicated GPU",
-                           g.integrated ? g.name : g.name + L" · " + FormatBytes(g.dedicatedVram)});
+                           (g.integrated ? g.name : g.name + L" · " + FormatBytes(g.dedicatedVram)) +
+                               (g.tempC < 0 ? L"" : L"  ·  " + TempText(g.tempC))});
         if (s.gpus.empty()) sys.push_back({L"Graphics", L"—"});
         sys.push_back({L"Memory", FormatBytes(s.memTotal) + L" installed"});
         sys.push_back({L"Up time", FormatDuration(GetTickCount64() / 1000)});
@@ -337,8 +338,11 @@ private:
             freeAll += v.free;
             const double usedFrac = 1.0 - double(v.free) / double(v.total);
             const bool low = double(v.free) / double(v.total) < 0.1;
+            std::wstring temp;
+            for (const auto& d : s.disks)  // d.volumes is "C: D:"
+                if (d.tempC >= 0 && d.volumes.find(v.root.substr(0, 2)) != std::wstring::npos) temp = L"  ·  " + TempText(d.tempC);
             lines.push_back({v.root + (v.label.empty() ? L"" : L"  " + v.label),
-                             FormatBytes(v.free) + L" free of " + FormatBytes(v.total), usedFrac,
+                             FormatBytes(v.free) + L" free of " + FormatBytes(v.total) + temp, usedFrac,
                              low ? g_pal.warn : g_pal.disk});
         }
         storage_.SetLines(std::move(lines), FormatBytes(freeAll) + L" free in total");

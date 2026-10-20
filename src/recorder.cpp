@@ -26,7 +26,9 @@ namespace {
 constexpr std::array<char, 8> kMagic = {'M','T','M','T','R','A','C','E'};
 constexpr uint32_t kVersion        = 1;
 constexpr size_t   kHeaderBytes    = 16;
-constexpr uint64_t kMaxFileBytes   = 1ull << 30;   // 1 GiB
+// Decoded samples cost several times their size on disk, so the cap is low: 200 MiB is about
+// 40 hours at 1 Hz and needs well under 1 GiB of memory to load.
+constexpr uint64_t kMaxFileBytes   = 200ull << 20;   // 200 MiB
 static_assert(kMaxFileBytes <= 0xFFFFFFFFull, "ReadFile size cast assumes <= 4 GiB");
 
 // Bounds shared by the encoder and the decoder, so they can never disagree.
@@ -418,7 +420,7 @@ bool FlightRecorder::Load(const std::wstring& path,
     }
     if (static_cast<uint64_t>(size.QuadPart) > kMaxFileBytes) {
         CloseHandle(h);
-        error = L"The trace is larger than 1 GB.";
+        error = L"The trace is larger than 200 MB.";
         return false;
     }
 

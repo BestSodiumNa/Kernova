@@ -114,8 +114,13 @@ An honest list is more valuable than a feature list.
   `WriteTransferCount` separately, but in practice the split is unreliable
   for processes that use memory-mapped files or that do I/O through the
   cache. Only the total is shown.
-- **Per-core temperature is not shown.** It requires a kernel driver on most
-  systems. The app doesn't have one.
+- **Per-core CPU temperature is not shown, and the CPU reading depends on a
+  companion tool.** Real die temperature requires a kernel driver, which the
+  app doesn't have. The CPU temperature is the package value from
+  LibreHardwareMonitor or OpenHardwareMonitor when one is running, otherwise
+  the ACPI thermal zone, which is approximate (often a motherboard or
+  chassis sensor). GPU temperature comes from the driver and is accurate where
+  the driver reports it.
 - **USB-attached SATA drives only expose SMART when the bridge passes ATA
   passthrough.** Many don't. The health page shows "This drive doesn't
   expose health data through Windows" for those drives.
@@ -224,9 +229,14 @@ in `architecture.md` and in `security.md`.
 
 - **Not a Task Manager replacement.** It has features Task Manager doesn't,
   and it lacks features Task Manager has. It's a different tool.
-- **Not a system cleaner, optimizer, or "tune-up" utility.** The Optimize
-  drives panel runs `defrag.exe` with the same flags Windows' own tool uses;
-  it doesn't invent its own optimisation heuristics.
+- **Not a system cleaner or "tune-up" utility.** The Optimize drives panel
+  runs `defrag.exe` with the same flags Windows' own tool uses; it doesn't
+  invent its own optimisation heuristics. The Game tweaks page changes a few
+  documented Windows settings (GPU interrupt mode, scheduler time slices, USB
+  selective suspend), each one only on request, optionally behind a System
+  Restore point, with the original values saved so they can be put back. It doesn't ship a
+  list of "boost your PC" registry edits, and it says plainly that the effect
+  of most of them is small.
 - **Not a security tool.** It shows you what's running and what's connected;
   it doesn't judge whether that's suspicious. Use Process Explorer, Autoruns,
   and your own judgement for that.

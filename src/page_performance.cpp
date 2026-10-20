@@ -100,9 +100,14 @@ public:
         const DWORD logical = static_cast<DWORD>(s.cores.size());
 
         cpu_.Push(s.cpu);
+        cpu_.SetTemps({CpuTempText(s.cpuTemp, true)});
         cpu_.SetText(L"CPU", Format(L"%.0f%%", s.cpu),
-                     Format(L"%s\n%.2f GHz\t%lu threads\tup %s", CpuBrandName().c_str(), s.avgMhz / 1000.0, logical,                            FormatDuration(GetTickCount64() / 1000).c_str()));
+                     Format(L"%s\n%.2f GHz\t%lu threads\tup %s", CpuBrandName().c_str(), s.avgMhz / 1000.0, logical,
+                            FormatDuration(GetTickCount64() / 1000).c_str()));
 
+        std::vector<std::wstring> gpuTemps;
+        for (const auto& g : s.gpus) gpuTemps.push_back(TempText(g.tempC));
+        gpu_.SetTemps(std::move(gpuTemps));
         if (s.gpus.size() >= 2) {
             // One line per GPU: the dedicated one in the GPU colour, the others in contrasting ones.
             std::vector<Graph::Series> series;
@@ -139,6 +144,9 @@ public:
                             FormatBytes(s.memTotal).c_str(), FormatBytes(s.memAvail).c_str(), FormatBytes(s.commitUsed).c_str(),
                             FormatBytes(s.commitLimit).c_str(), FormatBytes(s.memCached).c_str()));
 
+        std::vector<std::wstring> diskTemps;
+        for (const auto& d : s.disks) diskTemps.push_back(TempText(d.tempC));
+        disk_.SetTemps(std::move(diskTemps));
         if (s.disks.size() >= 2) {
             std::vector<Graph::Series> series;
             std::vector<double> values;

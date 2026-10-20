@@ -43,12 +43,6 @@ const PresetRecipe kRecipes[] = {
 
 bool SameGuid(const GUID& a, const GUID& b) { return memcmp(&a, &b, sizeof a) == 0; }
 
-std::wstring GuidText(const GUID& g) {
-    wchar_t buf[64] = {};
-    StringFromGUID2(g, buf, ARRAYSIZE(buf));
-    return buf;
-}
-
 std::wstring FriendlyName(const GUID& scheme) {
     DWORD size = 0;
     if (PowerReadFriendlyName(nullptr, &scheme, nullptr, nullptr, nullptr, &size) != ERROR_SUCCESS || !size) return L"";
@@ -65,41 +59,12 @@ bool IsLegacyPresetPlanName(const std::wstring& name, size_t i) {
     return false;
 }
 
-// Starts this exe elevated with `params` and waits for it. Returns its exit code or a Win32 error.
-DWORD RunSelfElevated(const std::wstring& params) {
-    wchar_t exe[MAX_PATH * 2];
-    GetModuleFileNameW(nullptr, exe, ARRAYSIZE(exe));
-    const HRESULT com = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
-    SHELLEXECUTEINFOW sei{sizeof sei};
-    sei.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI;
-    sei.hwnd = g_main;
-    sei.lpVerb = L"runas";
-    sei.lpFile = exe;
-    sei.lpParameters = params.c_str();
-    sei.nShow = SW_HIDE;
-    DWORD result;
-    if (!ShellExecuteExW(&sei)) {
-        result = GetLastError();
-    } else {
-        WaitForSingleObject(sei.hProcess, 60000);
-        if (!GetExitCodeProcess(sei.hProcess, &result)) result = GetLastError();
-        CloseHandle(sei.hProcess);
-    }
-    if (SUCCEEDED(com)) CoUninitialize();
-    return result;
-}
+}  // namespace
 
-// Tries `fn` directly; if Windows says we need admin rights, re-runs it through the helper.
-DWORD WithElevation(const std::function<DWORD()>& fn, const std::wstring& helperParams) {
-    const DWORD r = fn();
-    if (r != ERROR_ACCESS_DENIED || IsElevated()) return r;
-    return RunSelfElevated(helperParams);
-}
-
-DWORD WriteBoth(const GUID& scheme, const GUID& setting, DWORD value) {
-    DWORD r = PowerWriteACValueIndex(nullptr, &scheme, &kSubProcessor, &setting, value);
-    if (r == ERROR_SUCCESS) r = PowerWriteDCValueIndex(nullptr, &scheme, &kSubProcessor, &setting, value);
-    return r;
+std::wstring GuidText(const GUID& g) {
+    wchar_t buf[64] = {};
+    StringFromGUID2(g, buf, ARRAYSIZE(buf));
+    return buf;
 }
 
 bool ActiveScheme(GUID& out) {
@@ -108,6 +73,57 @@ bool ActiveScheme(GUID& out) {
     out = *active;
     LocalFree(active);
     return true;
+}
+
+DWORD RunElevated(const std::wstring& file, const std::wstring& params, const std::function<void()>& whileWaiting,
+                  DWORD timeoutMs) {
+    const HRESULT com = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+    SHELLEXECUTEINFOW sei{sizeof sei};
+    sei.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI;
+    sei.hwnd = g_main;
+    sei.lpVerb = L"runas";
+    sei.lpFile = file.c_str();
+    sei.lpParameters = params.c_str();
+    sei.nShow = SW_HIDE;
+    DWORD result;
+    if (!ShellExecuteExW(&sei)) {
+        result = GetLastError();  // ERROR_CANCELLED when the UAC prompt is declined
+    } else {
+        if (whileWaiting) {
+            const ULONGLONG start = GetTickCount64();
+            while (WaitForSingleObject(sei.hProcess, 150) == WAIT_TIMEOUT) {
+                whileWaiting();
+                if (timeoutMs != INFINITE && GetTickCount64() - start >= timeoutMs) break;
+            }
+        } else {
+            WaitForSingleObject(sei.hProcess, timeoutMs);
+        }
+        if (!GetExitCodeProcess(sei.hProcess, &result)) result = GetLastError();
+        else if (result == STILL_ACTIVE) result = WAIT_TIMEOUT;  // timed out: the helper is still running
+        CloseHandle(sei.hProcess);
+    }
+    if (SUCCEEDED(com)) CoUninitialize();
+    return result;
+}
+
+DWORD RunSelfElevated(const std::wstring& params, DWORD timeoutMs) {
+    wchar_t exe[MAX_PATH * 2];
+    GetModuleFileNameW(nullptr, exe, ARRAYSIZE(exe));
+    return RunElevated(exe, params, {}, timeoutMs);
+}
+
+DWORD WithElevation(const std::function<DWORD()>& fn, const std::wstring& helperParams) {
+    const DWORD r = fn();
+    if (r != ERROR_ACCESS_DENIED || IsElevated()) return r;
+    return RunSelfElevated(helperParams);
+}
+
+namespace {
+
+DWORD WriteBoth(const GUID& scheme, const GUID& setting, DWORD value) {
+    DWORD r = PowerWriteACValueIndex(nullptr, &scheme, &kSubProcessor, &setting, value);
+    if (r == ERROR_SUCCESS) r = PowerWriteDCValueIndex(nullptr, &scheme, &kSubProcessor, &setting, value);
+    return r;
 }
 
 // Processor settings that make a Balanced copy behave like a Windows plan that this PC

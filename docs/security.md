@@ -17,7 +17,7 @@ rights, and those are performed by re-launching the app elevated with a
 specific command-line flag, doing one thing, and exiting. The UI itself never
 runs elevated unless the user explicitly restarts it that way.
 
-The three elevated helpers are:
+The four elevated helpers are:
 
 - `--set-dns <guid> <v4-list> <v6-list>` — changes the DNS servers on the
   network adapter with the given GUID. `<guid>` must parse as a GUID via
@@ -25,17 +25,47 @@ The three elevated helpers are:
   IPv6 address via `InetPton`. An empty list is `-`.
 - `--optimize <letter> <analyze|optimize> <path>` — runs `defrag.exe` on the
   given drive. `<letter>` must be a single alphabetic character, the second
-  argument must be exactly `analyze` or `optimize`, and `<path>` must end in
-  `.mtmopt`. The path is used as the name of a temp file that the elevated
-  process appends its output to; the UI tail-reads that file for progress.
+  argument must be exactly `analyze` or `optimize`, and `<path>` must be a
+  file that already exists and whose name starts with `mtm-optimize-` and ends
+  in `.mtmopt` (the UI creates it in the temp folder first). The elevated
+  process opens it for append only, never creates it, and refuses directories
+  and links; the UI tail-reads that file for progress.
 - `--power <subcommand>` — three fixed shapes: `parking on|off`,
   `preset <digit>`, or `delete <guid>`. The GUID must parse via
   `IIDFromString`; the digit must be a single character in `0`–`9`.
+- `--tweak [restore] "<field|field|...>" ...` — applies game tweaks. Each
+  argument is one entry of one of three shapes, and every entry is range
+  checked before anything is written:
+  - `quantum|<0–63 or ->` sets `Win32PrioritySeparation` under
+    `HKLM\SYSTEM\CurrentControlSet\Control\PriorityControl`.
+  - `usb|<plan guid>|<0|1>|<0|1>` sets the USB selective-suspend value of a
+    power plan (AC and battery).
+  - `<PCI display adapter instance id>|<0|1 or ->|<0–3 or ->` sets
+    `MSISupported` and `DevicePriority` in that adapter's device parameters
+    key. The id must name a PCI display adapter that is present.
+
+  `-` means "remove the value". With `restore`, the helper first creates a
+  System Restore point and stops without changing anything if that fails.
+  To do so it temporarily sets `SystemRestorePointCreationFrequency` under
+  `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SystemRestore` to 0 and
+  puts it back afterwards (removing it again if it wasn't set before).
+
+Disk optimization settings (the Windows scheduled defrag task) are changed by
+running `schtasks.exe` elevated with a fixed argument list, not through
+`Kernova.exe`.
 
 If you find a way to make any of these do something outside its documented
 shape — especially if it lets you pass a path, a shell command, or an
 arbitrary registry key — please report it. The parsers are intended to be
 strict; anything they accept beyond what's listed above is a bug.
+
+## Temperature sensors
+
+CPU temperature is read from the local WMI namespace published by
+LibreHardwareMonitor or OpenHardwareMonitor, if either is running, and from
+the ACPI thermal-zone performance counter. Both are read-only local queries;
+Kernova loads no driver and writes nothing to those namespaces. GPU temperature
+is a read-only query to the graphics driver.
 
 ## Shell execution
 
@@ -72,11 +102,22 @@ auto-update check, no background polling of any endpoint.
 
 ## Local data
 
-The app writes to two places:
+The app writes to these places:
 
 - `HKCU\Software\Kernova` — settings. The schema is documented in
   `docs/formats.md`.
 - `%LOCALAPPDATA%\Kernova\benchmarks.dat` — benchmark history.
+- `%LOCALAPPDATA%\Kernova\tweaks-backup.txt` — the original values of the
+  game tweaks, so they can be restored. Entries are re-validated before the
+  elevated helper uses them, so editing this file can't make the helper write
+  anything it wouldn't accept from the command line.
+- `%TEMP%\mtm-optimize-*.mtmopt` — progress of a running disk optimization,
+  deleted when it ends.
+
+Besides these, the Game tweaks page changes Windows settings (listed under
+"Privileged operations" above) and creates a System Restore point. Nothing is
+changed unless you ask for it, and "Restore original" puts the saved values
+back.
 
 Trace files are written only when the user presses "Start recording" or
 "Save buffer," and only to a path the user chooses.

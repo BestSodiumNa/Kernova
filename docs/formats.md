@@ -1,7 +1,7 @@
 ﻿# File and registry formats
 
 This document describes every persistent thing the app writes: the trace
-file, the benchmark history, and the registry schema.
+file, the benchmark history, the game-tweak backup, and the registry schema.
 
 ## `.mtmtrace` — Flight Recorder trace
 
@@ -90,6 +90,9 @@ that exceeds them is treated as corrupt.
   offset and produce a cascade of garbage.
 - An empty file, a file with the wrong magic, or a file with an unsupported
   version is rejected with a specific error message.
+- A file larger than 200 MiB (about 40 hours at 1 Hz) is refused before it is
+  mapped: the whole trace is decoded into memory, and decoded samples take
+  several times their size on disk.
 
 ### Forward compatibility
 
@@ -157,6 +160,9 @@ All values are under this key. Values are `REG_DWORD` unless noted.
 | `BenchGpuLuidLow` | DWORD | Low part of the LUID of the GPU selected on the Benchmarks page |
 | `OptimizeReminderDays` | DWORD | Reminder interval for drive optimization (`0` = off, `14`, `30`, or `90`) |
 | `OptimizeSnoozeUntil` | BINARY | A FILETIME; the reminder is suppressed until this time |
+| `ConnView` | DWORD | Selected tab on the Connections page (`0` = connections, `1` = speed test, `2` = DNS) |
+| `TesterLayout` | DWORD | Keyboard layout on the Input tester page (`0` = detect, `1` = full size, `2` = TKL, `3` = 75%, `4` = 65%, `5` = 60%) |
+| `TweakRestorePoint` | DWORD | `1` (default) = make a System Restore point before applying game tweaks, `0` = don't |
 
 ### Migration from earlier names
 
@@ -168,3 +174,21 @@ once per process and can be removed if those names are never used again.
 ## `%LOCALAPPDATA%\Kernova\benchmarks.dat`
 
 See the section above. The directory is created on first write.
+
+## `%LOCALAPPDATA%\Kernova\tweaks-backup.txt` — original game-tweak values
+
+UTF-16LE text, one line per tweak that has been changed, fields separated by
+tabs, lines ending in `\n`. It holds the value from before Kernova first
+changed it, and "Restore original" writes it back. A tweak that was not set
+before is stored as `-`.
+
+| First field | Fields after it |
+|---|---|
+| a PCI display adapter instance id | `MSISupported`, `DevicePriority` |
+| `quantum` | `Win32PrioritySeparation` |
+| `usb` | power plan GUID, AC value, DC value |
+
+The file is written to `tweaks-backup.txt.tmp` and moved over the old one, so
+a crash leaves either the old or the new file. If it can't be written, no tweak
+is applied. Entries are validated again before the elevated helper uses them
+(see `security.md`).

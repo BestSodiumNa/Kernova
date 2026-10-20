@@ -8,9 +8,9 @@ invariants that are easy to break, and how to add a page.
 ## Overview
 
 One window, one UI thread, one shared sampler that runs on the UI thread, and
-short-lived background workers per feature. There is exactly one object shared
-between threads (`FlightRecorder`), and its rules are documented in its own
-section.
+short-lived background workers per feature. There are two objects shared
+between threads (`FlightRecorder` and the CPU temperature worker in
+`sensors.cpp`), and their rules are documented in their own sections.
 
 ```text
 wWinMain
@@ -194,6 +194,27 @@ The adapter list comes from `EnumerateGpus()` in `benchmarks.cpp`, which uses
 adapter 0 because it drives the display, so the dedicated one would otherwise be
 hidden.
 
+### `sensors.cpp` — temperatures
+
+GPU temperature comes from `D3DKMTQueryAdapterInfo(KMTQAITYPE_ADAPTERPERFDATA)`
+on the adapter's LUID, called from `QueryGpuAdapter` on the UI thread (it is a
+fast call). The driver reports tenths of a degree; adapters that don't support
+it return 0 and show no temperature.
+
+CPU temperature has no unprivileged source for the real die temperature, so
+`CpuTempWorker` polls every 2 s on its own thread:
+
+1. LibreHardwareMonitor, then OpenHardwareMonitor, over WMI
+   (`ROOT\LibreHardwareMonitor` / `ROOT\OpenHardwareMonitor`, class `Sensor`).
+   Prefers `CPU Package` / `Core (Tctl/Tdie)`, else the hottest CPU sensor.
+2. Fallback: PDH `\Thermal Zone Information(*)\Temperature` (kelvin). This is
+   the ACPI thermal zone, not the die, so the UI labels it approximate.
+
+This is the **second object shared between threads** (after `FlightRecorder`).
+It exists because WMI calls can block; the worker stores its result under a
+mutex and `CpuTempNow()` returns a copy. The `std::jthread` is the last member,
+per the convention above. Readings outside 1–125 °C are discarded.
+
 ### `net.cpp` — speed test, adapters, DNS
 
 Speed test uses WinHTTP against `speed.cloudflare.com`, the same endpoints
@@ -234,15 +255,17 @@ NVMe health uses `IOCTL_STORAGE_QUERY_PROPERTY` with
 returned descriptor carries the log payload at `ProtocolDataOffset` from the
 start of `STORAGE_PROTOCOL_SPECIFIC_DATA`.
 
-### `power.cpp` and `defrag.cpp` — the elevated helper pattern
+### `power.cpp`, `defrag.cpp`, `net.cpp`, `tweaks.cpp` — the elevated helper pattern
 
-Both files, along with `net.cpp`, implement the same pattern:
+These files implement the same pattern:
 
 1. The UI thread calls a "try it directly" function.
 2. If it fails with `ERROR_ACCESS_DENIED` and the process isn't elevated, the
    function re-launches `Kernova.exe` elevated with a specific command-line flag
-   (`--power`, `--optimize`, `--set-dns`), waits for it, and returns its exit
-   code.
+   (`--power`, `--optimize`, `--set-dns`, `--tweak`), waits for it, and returns
+   its exit code. The launching code is `RunElevated` / `RunSelfElevated` in
+   `power.cpp`; every helper uses it. A helper still running after its timeout
+   is reported as `WAIT_TIMEOUT`, not as its (still pending) exit code.
 3. The elevated instance parses its command line, performs the operation, and
    exits.
 
@@ -256,9 +279,14 @@ is therefore strict:
 - `--set-dns` accepts a GUID and two comma-separated IP lists (IPv4 and IPv6),
   each entry validated with `InetPton`. An empty list is `-`.
 - `--optimize` accepts a single drive letter, the literal `analyze` or
-  `optimize`, and a path ending in `.mtmopt`. Everything else is rejected.
+  `optimize`, and the path of an existing progress file named
+  `mtm-optimize-*.mtmopt`, which it opens for append only (no creating, no
+  directories, no links). Everything else is rejected.
 - `--power` accepts three fixed shapes: `parking on|off`, `preset <digit>`, or
   `delete <guid>`.
+- `--tweak [restore]` accepts entries of three fixed shapes (`quantum`, `usb`,
+  or a PCI display adapter id), each range-checked by `ValidEntry` before
+  anything is written. `ValidTweakEntry` exposes it for the tests.
 
 If you add a new helper, follow the same pattern: strict argument validation, no
 paths from untrusted sources, no shell metacharacters, and the operation should
@@ -407,8 +435,12 @@ See `docs/formats.md` for the byte layout. What's worth knowing here:
   entries are dropped rather than growing the queue without bound.
 - A write failure closes the file and stops the writer thread; the UI sees
   `Recording()` become false and `LastError()` become non-empty.
-- The reader memory-maps the file rather than reading it into memory. A 900 MB
-  trace opens instantly and decodes without allocating the file size.
+- The reader memory-maps the file rather than copying it into a buffer first,
+  but it still decodes every sample into memory, which takes several times the
+  size on disk. That is why `Load` refuses files over 200 MiB (`kMaxFileBytes`,
+  about 40 hours at 1 Hz). Raise it only together with a streaming reader.
+  If the file is truncated by another process while it is being read, the
+  mapped read can fault; the loader does not guard against that.
 
 ## Invariants worth writing down
 
@@ -458,12 +490,26 @@ These are the things that will bite you if you change them carelessly.
 6. If the page has a `std::jthread` or a `std::future` worker, declare it as the
    last member of the class.
 
+## Tests
+
+`CMakeLists.txt` builds everything except `main.cpp` as an object library
+(`kernova_core`) that both `Kernova.exe` and `tests\tests.cpp` link. The tests
+are a plain console program (no framework): they round-trip a trace file, check
+that a corrupt, truncated, wrong-version or oversized trace is handled as
+documented, and pin down what `ValidTweakEntry` accepts. Run them with
+`ctest --test-dir build --output-on-failure`.
+
+When you add parsing code or a new elevated helper, add its accept/reject cases
+there. Anything the elevated helpers accept is a security boundary, so a change
+to it should come with a test.
+
 ## What was deliberately not done
 
 - **No kernel driver.** Everything is user-mode. This means some things are
   unreachable: full disk temperature on some USB bridges, some SMART attributes
-  on NVMe drives behind certain RAID controllers, and per-core temperature on
-  most systems. That's an accepted limitation.
+  on NVMe drives behind certain RAID controllers, and per-core temperature.
+  Real CPU die temperature is only shown when LibreHardwareMonitor or
+  OpenHardwareMonitor is running alongside. That's an accepted limitation.
 - **No always-elevated mode.** Elevation is opt-in per action via the helper
   pattern. The app never asks to run as administrator for its own sake.
 - **No telemetry, no auto-update, no crash reporter.** If a user wants to report

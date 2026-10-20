@@ -1,0 +1,67 @@
+#pragma once
+
+#include "common.h"
+
+namespace mtm {
+
+// Latency tweaks for gaming. Every change first saves the original value to a backup
+// file, so Undo puts back exactly what was there before (including "not set").
+
+// One PCI graphics adapter's interrupt settings (Device Parameters\Interrupt Management).
+struct GpuInterrupts {
+    std::wstring name, instanceId;
+    int msiSetting = -1;  // MSISupported: -1 not set (driver default), 0 off, 1 on
+    int priority = -1;    // Affinity Policy\DevicePriority: -1 not set, 1 low, 2 normal, 3 high
+    int msiInUse = -1;    // what Windows actually assigned right now: -1 unknown, 0 line-based, 1 MSI
+};
+std::vector<GpuInterrupts> ListGpuInterrupts();
+
+// Win32PrioritySeparation (thread quantum + foreground boost). nullopt-style: exists=false = not set.
+struct QuantumState {
+    bool exists = false;
+    DWORD value = 2;  // Windows' default
+};
+QuantumState ReadQuantum();
+std::wstring DescribeQuantum(DWORD value);
+struct QuantumPreset {
+    const wchar_t* name;
+    DWORD value;
+};
+const std::vector<QuantumPreset>& QuantumPresets();
+
+// USB selective suspend in the active power plan (1 = devices may sleep).
+struct UsbSuspendState {
+    bool known = false;
+    DWORD ac = 1, dc = 1;
+};
+UsbSuspendState ReadUsbSuspend();
+
+enum class TweakKind { Gpu, Quantum, Usb };
+struct TweakRequest {
+    TweakKind kind;
+    std::wstring key;   // GPU instance id
+    bool undo = false;  // restore the backed-up original instead of applying
+    // Values to apply. GPU: MSISupported, DevicePriority (-1 = remove, back to the driver's
+    // default). Quantum: the Win32PrioritySeparation value. USB: plugged-in, battery (0 off, 1 on).
+    int v1 = -1, v2 = -1;
+};
+// Applies / undoes all requests, optionally creating a System Restore point first, with
+// at most one UAC prompt. If the restore point fails nothing is changed, *pointFailed is set
+// and the error is returned (ERROR_SERVICE_DISABLED = System Protection is off).
+// GPU changes need a restart. Blocks; call from a worker thread.
+DWORD RunTweaks(const std::vector<TweakRequest>& requests, bool restorePointFirst, bool* pointFailed = nullptr);
+
+// False when System Protection (System Restore) is off, so no restore point can be made.
+bool SystemProtectionOn();
+
+// Whether Undo has something to restore. key = GPU instance id, or "quantum" / "usb".
+bool HasTweakBackup(const std::wstring& key);
+
+// Handles "--tweak ..." (the elevated helper).
+bool HandleTweakCommandLine(int& exitCode);
+
+// Whether the elevated helper would accept this entry ("field|field|..." split into fields).
+// Exposed so the tests can pin down what the helper is willing to write.
+bool ValidTweakEntry(const std::vector<std::wstring>& entry);
+
+}  // namespace mtm

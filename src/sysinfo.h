@@ -1,6 +1,7 @@
 #pragma once
 
 #include "common.h"
+#include "sensors.h"
 
 namespace mtm {
 
@@ -19,6 +20,7 @@ struct SystemSnapshot {
     double cpu = 0;
     std::vector<CoreInfo> cores;
     double avgMhz = 0;
+    CpuTemp cpuTemp;
 
     uint64_t memTotal = 0, memAvail = 0, commitUsed = 0, commitLimit = 0, memCached = 0;
 
@@ -27,6 +29,7 @@ struct SystemSnapshot {
         int number = 0;          // physical disk number ("Disk 0")
         std::wstring volumes;    // "C: D:"
         double active = 0, read = 0, write = 0;
+        double tempC = -1;       // negative = unavailable
     };
     std::vector<Disk> disks;     // each physical disk, by number
     double netIn = 0, netOut = 0;                        // bytes/s
@@ -41,6 +44,7 @@ struct SystemSnapshot {
         double usage = 0;            // busiest engine on this GPU, %
         uint64_t dedicatedUsed = 0;  // bytes
         uint64_t sharedUsed = 0;
+        double tempC = -1;           // die temperature; negative = unavailable
     };
     std::vector<Gpu> gpus;          // all hardware GPUs, dedicated first
     std::wstring gpuName;           // the first of them

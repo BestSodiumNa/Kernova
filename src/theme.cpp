@@ -55,6 +55,10 @@ void SetMenusDark(bool dark) {
 
 constexpr wchar_t kPropPrimary[] = L"mtm.primary";
 constexpr wchar_t kPropHover[] = L"mtm.hover";
+constexpr wchar_t kPropOnCard[] = L"mtm.onCard";
+
+// What shows around a control's rounded corners: the card it sits on, or the page.
+COLORREF Backdrop(HWND h) { return GetPropW(h, kPropOnCard) ? g_pal.surface : g_pal.bg; }
 
 LRESULT CALLBACK ButtonProc(HWND h, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR, DWORD_PTR) {
     switch (msg) {
@@ -130,10 +134,9 @@ LRESULT CALLBACK EditProc(HWND h, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR, DWOR
         const bool hover = GetPropW(h, kPropHover) != nullptr;
         const bool disabled = !IsWindowEnabled(h);
         {
+            FillRect(wdc, &rc, BrushFor(Backdrop(h)));
             Gdiplus::Graphics g(wdc);
             g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
-            Gdiplus::SolidBrush back(ToColor(g_pal.bg));
-            g.FillRectangle(&back, 0, 0, rc.right, rc.bottom);
             const float inset = focused ? ScaleF(1.0f) : 0.5f;
             const Gdiplus::RectF box(inset, inset, float(rc.right) - 2 * inset, float(rc.bottom) - 2 * inset);
             const float radius = std::min(ScaleF(10), box.Height / 2);
@@ -200,10 +203,9 @@ LRESULT CALLBACK ComboProc(HWND h, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR, DWO
         const bool hover = GetPropW(h, kPropHover) != nullptr;
         const bool disabled = !IsWindowEnabled(h);
         {
+            FillRect(mem, &rc, BrushFor(Backdrop(h)));
             Gdiplus::Graphics g(mem);
             g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
-            Gdiplus::SolidBrush back(ToColor(g_pal.bg));
-            g.FillRectangle(&back, 0, 0, rc.right, rc.bottom);
             const Gdiplus::RectF box(0.5f, 0.5f, float(rc.right) - 1, float(rc.bottom) - 1);
             const float radius = std::min(ScaleF(10), box.Height / 2);
             const COLORREF fill =
@@ -516,10 +518,10 @@ void PaintSlider(HWND h, HDC target) {
     HBITMAP bmp = CreateCompatibleBitmap(target, w, hgt);
     HGDIOBJ oldBmp = SelectObject(mem, bmp);
     {
+        const RECT all{0, 0, w, hgt};
+        FillRect(mem, &all, BrushFor(Backdrop(h)));
         Gdiplus::Graphics g(mem);
         g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
-        Gdiplus::SolidBrush back(ToColor(g_pal.bg));
-        g.FillRectangle(&back, 0, 0, w, hgt);
         const bool enabled = IsWindowEnabled(h) != FALSE;
         const bool dragging = GetCapture() == h;
         const bool hot = dragging || GetPropW(h, kPropSliderHot) != nullptr;
@@ -538,7 +540,7 @@ void PaintSlider(HWND h, HDC target) {
         }
         Gdiplus::SolidBrush knob(ToColor(color));
         g.FillEllipse(&knob, cx - r, cy - r, 2 * r, 2 * r);
-        Gdiplus::SolidBrush core(ToColor(g_pal.bg));
+        Gdiplus::SolidBrush core(ToColor(Backdrop(h)));
         const float ir = r * 0.4f;
         g.FillEllipse(&core, cx - ir, cy - ir, 2 * ir, 2 * ir);
     }
@@ -615,6 +617,11 @@ LRESULT CALLBACK SliderProc(HWND h, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR, DW
 }
 }  // namespace
 
+void SetOnCard(HWND control) {
+    SetPropW(control, kPropOnCard, reinterpret_cast<HANDLE>(1));  // page controls live as long as the app
+    InvalidateRect(control, nullptr, FALSE);
+}
+
 void ThemeSlider(HWND h) {
     // A fixed thumb length matching the drawn knob, and no dotted focus rectangle.
     SetWindowLongPtrW(h, GWL_STYLE, GetWindowLongPtrW(h, GWL_STYLE) | TBS_FIXEDLENGTH);
@@ -658,7 +665,7 @@ bool DrawThemedItem(const DRAWITEMSTRUCT* dis) {
         text = g_pal.text;
     }
 
-    FillRect(dc, &rc, BrushFor(g_pal.bg));
+    FillRect(dc, &rc, BrushFor(Backdrop(h)));
     {
         Gdiplus::Graphics g(dc);
         g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);

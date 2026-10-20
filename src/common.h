@@ -18,6 +18,8 @@ namespace mtm {
 // Posted to the main window to run a callback on the UI thread.
 constexpr UINT WM_APP_RUN = WM_APP + 1;
 constexpr wchar_t kAppName[] = L"Kernova";
+// GUID_DEVINTERFACE_HID, spelled out so no file needs hidclass.h / initguid just for it.
+constexpr GUID kHidInterface = {0x4d1e55b2, 0xf16f, 0x11cf, {0x88, 0xcb, 0x00, 0x11, 0x11, 0x00, 0x00, 0x30}};
 
 extern HINSTANCE g_inst;
 extern HWND g_main;

@@ -7,12 +7,13 @@ there is no licensing or network activation code.
 
 | Tab | What it does | Main Windows APIs |
 |---|---|---|
-| Summary | One-page overview: Windows version, processor, graphics, storage, network and exposure (listening ports), signed-in users, up time | Registry, PDH, DXGI, `GetExtendedTcpTable` |
+| Summary | One-page overview: Windows version, processor, graphics, storage, network and exposure (listening ports), signed-in users, up time; CPU and GPU temperatures | Registry, PDH, DXGI, `D3DKMTQueryAdapterInfo`, `GetExtendedTcpTable` |
 | Processes | CPU, memory, GPU, I/O rate, threads, handles; search, run new task; end, suspend/resume, efficiency mode, priority, open location | `NtQuerySystemInformation`, `NtSuspendProcess`, `SetProcessInformation(ProcessPowerThrottling)` |
 | Performance | Live CPU / GPU / memory / disk / network graphs and per-core tiles | `GetSystemTimes`, PDH (incl. GPU Engine counters), `GetIfTable2`, DXGI |
 | Connections | Every TCP/UDP socket with owning process and exposure (all interfaces / loopback) | `GetExtendedTcpTable`, `GetExtendedUdpTable` |
 | Users | Signed-in sessions with their state; disconnect, sign out, copy user name | WTS (`WTSEnumerateSessionsW`) |
 | Power & Freq | Live per-core clocks, battery, power plan | `CallNtPowerInformation`, PDH `% Processor Performance` |
+| Game tweaks | GPU interrupt mode and priority, scheduler time slices, USB selective suspend; can make a System Restore point first (on by default) and restore the original values | Device registry keys, `Win32PrioritySeparation`, power settings, System Restore |
 | Startup apps | Run keys + Startup folders; enable/disable like Task Manager | Registry `StartupApproved` |
 | Services | Status, PID, start type; start/stop/restart | Service Control Manager |
 | Installed apps | Registry (4 views), MSI and Store apps; search, uninstall | Registry, `MsiEnumProductsExW`, WinRT `PackageManager` |
@@ -20,6 +21,8 @@ there is no licensing or network activation code.
 | Drive Health | SMART (SATA) and NVMe health, temperature, failure prediction; drive optimization with reminders | `IOCTL_ATA_PASS_THROUGH`, `IOCTL_STORAGE_QUERY_PROPERTY`, `defrag.exe` |
 | Flight Recorder | Records system and top-process samples to a `.mtmtrace` file, or saves the in-memory buffer (about an hour at 1 Hz) | PDH, `NtQuerySystemInformation`, memory-mapped file I/O |
 | Benchmarks | CPU (FP64, single + multi), GPU (D3D11 compute), Disk (sequential + 4K random) | `std::thread`, Direct3D 11, unbuffered file I/O |
+| Input tester | Mouse polling rate over time, buttons and wheel, keyboard key test and rollover; key depth on Wooting analog keyboards. Only reads input while Kernova is the active window | Raw Input, USB hub descriptors, HID |
+| Mouse settings | Razer mice: battery, DPI stages and custom DPI, polling rate up to 8000 Hz; Windows "enhance pointer precision" | HID feature reports, `SystemParametersInfo` |
 
 Right-click rows for actions. F5 refreshes, Ctrl+Tab / Ctrl+Shift+Tab switch pages.
 
@@ -36,7 +39,14 @@ Requires Visual Studio 2022 Build Tools ("Desktop development with C++", Windows
 build.bat
 ```
 
-Output: `build\Kernova.exe` (single file, static CRT, ~450 KB).
+Output: `build\Kernova.exe` (single file, static CRT, ~1.5 MB).
+
+The same build also makes `build\kernova_tests.exe`, which checks the trace-file loader and the
+validation the elevated helpers rely on:
+
+```bat
+ctest --test-dir build --output-on-failure
+```
 
 ## Layout
 
@@ -48,6 +58,10 @@ Output: `build\Kernova.exe` (single file, static CRT, ~450 KB).
 - `src/processes.*`, `src/sysinfo.*` — shared per-tick samplers
 - `src/apps.cpp`, `src/msix.cpp` — installed-app collectors
 - `src/benchmarks.*` — benchmark engines (run on a worker thread)
+- `src/sensors.*` — CPU / GPU / disk temperatures
+- `src/power.*`, `src/defrag.*`, `src/net.*`, `src/tweaks.*` — the actions that can need administrator rights (each has its own elevated `--xxx` helper)
+- `src/inputdev.*`, `src/razer.*` — input-device and Razer mouse access
+- `tests/` — checks for the parsers and validators
 
 ## Documentation
 

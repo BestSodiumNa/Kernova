@@ -10,6 +10,7 @@
 #include "recorder.h"
 #include "sysinfo.h"
 #include "theme.h"
+#include "tweaks.h"
 
 #include <objbase.h>
 #include <shellapi.h>
@@ -62,11 +63,14 @@ const wchar_t kPageIcons[] = {
     0xE7B8,  // Installed apps
     0xE716,  // Users
     0xE945,  // Power & frequency
+    0xE7FC,  // Game tweaks
     0xEDA2,  // Disk space
     0xE95E,  // Drive Health (Health)
     0xE774,  // Connections
     0xE7C8,  // Flight Recorder (Record)
     0xEC4A,  // Benchmarks
+    0xE962,  // Input tester (Mouse)
+    0xE713,  // Mouse settings (Settings)
 };
 int g_current = -1;
 int g_hover = kNavNone;
@@ -579,11 +583,14 @@ void OnCreate(HWND hwnd) {
     g_pages.push_back(MakeInstalledAppsPage());
     g_pages.push_back(MakeUsersPage());
     g_pages.push_back(MakePowerPage());
+    g_pages.push_back(MakeTweaksPage());
     g_pages.push_back(MakeDiskSpacePage());
     g_pages.push_back(MakeHealthPage());
     g_pages.push_back(MakeConnectionsPage());
     g_pages.push_back(MakeRecorderPage());
     g_pages.push_back(MakeBenchmarksPage());
+    g_pages.push_back(MakeInputPage());
+    g_pages.push_back(MakeDevicesPage());
     if (g_pages.size() != ARRAYSIZE(kPageIcons)) {
         MessageBoxW(hwnd, L"kPageIcons doesn't match the page list.", kAppName, MB_ICONERROR);
         ExitProcess(1);
@@ -770,6 +777,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCmd) {
     if (int code = 0; HandleSetDnsCommandLine(code)) return code;
     if (int code = 0; HandleOptimizeCommandLine(code)) return code;  // elevated defrag / TRIM helper
     if (int code = 0; HandlePowerCommandLine(code)) return code;     // elevated power-plan / parking helper
+    if (int code = 0; HandleTweakCommandLine(code)) return code;     // elevated game-tweaks helper
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     g_inst = instance;
 

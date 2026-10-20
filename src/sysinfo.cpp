@@ -205,6 +205,8 @@ void QueryGpuAdapter(SystemSnapshot& s) {
     static const std::vector<GpuAdapter> gpus = EnumerateGpus();
     s.gpus.clear();
     for (const GpuAdapter& g : gpus) s.gpus.push_back({g.name, g.dedicatedVram, g.integrated, g.luid});
+    for (auto& g : s.gpus) g.tempC = GpuTempC(g.luid);
+    s.cpuTemp = CpuTempNow();
     s.gpuName = gpus.empty() ? L"" : gpus.front().name;
     s.gpuDedicatedTotal = gpus.empty() ? 0 : gpus.front().dedicatedVram;
 }
@@ -315,6 +317,7 @@ void SampleSystem() {
         SampleGpu(pdh, s);
         SampleDisks(pdh, s);
     }
+    for (auto& d : s.disks) d.tempC = DiskTempC(d.number);
     g_sys = std::move(s);
 }
 

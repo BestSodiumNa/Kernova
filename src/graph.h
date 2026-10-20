@@ -78,6 +78,10 @@ public:
     // One value (and legend read-out) per series, in SetSeries order.
     void PushMany(const std::vector<double>& values, std::vector<std::wstring> legendValues);
 
+    // Secondary read-outs such as temperatures, drawn smaller and dimmer: beside the big value for a
+    // single series, in each legend row (before the percentage) for several. Empty strings hide one.
+    void SetTemps(std::vector<std::wstring> temps);
+
 private:
     bool Layered() const override { return true; }
     void PaintStatic(HDC dc, const RECT& rc) override;   // card, text, grid
@@ -87,7 +91,7 @@ private:
     }
     std::vector<Series> series_;
     std::vector<std::vector<double>> multi_;
-    std::vector<std::wstring> legendValues_;
+    std::vector<std::wstring> legendValues_, temps_;
     static constexpr size_t kCapacity = 60;  // visible samples (one extra is kept off the left edge)
     RECT plot_{};
     Tint tint_ = Tint::Cpu;
@@ -225,6 +229,7 @@ void HideRichTip();
 class InfoBadge : public Widget {
 public:
     void Create(std::wstring title, std::vector<TipSection> tip);
+    bool onCard = false;  // sits on a card: paint the card colour behind the glyph
 
 private:
     void Paint(HDC dc, const RECT& rc) override;

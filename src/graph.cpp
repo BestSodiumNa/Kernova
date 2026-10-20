@@ -290,6 +290,16 @@ void Graph::PaintStatic(HDC dc, const RECT& rc) {
     DrawTextW(dc, value_.c_str(), -1, &value, DT_LEFT | DT_TOP | DT_SINGLELINE | DT_NOPREFIX);
     SIZE valueSize{};
     GetTextExtentPoint32W(dc, value_.c_str(), static_cast<int>(value_.size()), &valueSize);
+    if (!legendRows && !temps_.empty() && !temps_[0].empty()) {
+        // Anchored past the widest likely value so the temperature doesn't jitter as digits change.
+        SIZE widest{};
+        GetTextExtentPoint32W(dc, L"100%", 4, &widest);
+        SelectObject(dc, UiFontBold());
+        SetTextColor(dc, g_pal.textDim);
+        RECT tr{in.left + std::max(valueSize.cx, widest.cx) + Scale(14), value.top, in.right,
+                value.top + valueSize.cy - Scale(6)};
+        DrawTextW(dc, temps_[0].c_str(), -1, &tr, DT_LEFT | DT_BOTTOM | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
+    }
     std::vector<RECT> legendDots;
     if (legendRows) {
         // Anchored past the widest likely value ("100%"), so the legend stays put as digits come and go.
@@ -309,9 +319,18 @@ void Graph::PaintStatic(HDC dc, const RECT& rc) {
             SIZE wide{};  // reserve room for "100%" so the label never re-truncates as digits change
             GetTextExtentPoint32W(dc, L"100%", 4, &wide);
             const int reserve = std::max(vs.cx, wide.cx);
-            RECT lr{row.left + Scale(16), row.top, std::max(row.left + Scale(16), row.right - reserve - Scale(10)), row.bottom};
             SelectObject(dc, UiFont());
             SetTextColor(dc, g_pal.textDim);
+            const std::wstring& tp = size_t(i) < temps_.size() ? temps_[size_t(i)] : std::wstring();
+            SIZE ts{};
+            GetTextExtentPoint32W(dc, tp.c_str(), static_cast<int>(tp.size()), &ts);
+            LONG labelRight = row.right - reserve - Scale(10);
+            if (ts.cx) {
+                RECT tr{labelRight - ts.cx - Scale(6), row.top, labelRight - Scale(6), row.bottom};
+                DrawTextW(dc, tp.c_str(), -1, &tr, DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+                labelRight = tr.left - Scale(4);
+            }
+            RECT lr{row.left + Scale(16), row.top, std::max<LONG>(row.left + Scale(16), labelRight), row.bottom};
             DrawTextW(dc, series_[size_t(i)].label.c_str(), -1, &lr, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
         }
     }
@@ -364,6 +383,12 @@ void Graph::SetSeries(std::vector<Series> series) {
     series_ = std::move(series);
     multi_.assign(series_.size(), {});
     legendValues_.clear();
+    InvalidateStatic();
+}
+
+void Graph::SetTemps(std::vector<std::wstring> temps) {
+    if (temps == temps_) return;
+    temps_ = std::move(temps);
     InvalidateStatic();
 }
 
@@ -1716,7 +1741,7 @@ void InfoBadge::OnMouse(UINT msg, int x, int) {
 }
 
 void InfoBadge::Paint(HDC dc, const RECT& rc) {
-    FillRect(dc, &rc, BrushFor(g_pal.bg));
+    FillRect(dc, &rc, BrushFor(onCard ? g_pal.surface : g_pal.bg));
     SetBkMode(dc, TRANSPARENT);
     HGDIOBJ old = SelectObject(dc, IconFont());
     SetTextColor(dc, hover_ ? g_pal.text : g_pal.accent);

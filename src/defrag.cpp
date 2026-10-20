@@ -1,5 +1,7 @@
 #include "defrag.h"
 
+#include "power.h"
+
 #include <objbase.h>
 #include <shellapi.h>
 #include <winevt.h>
@@ -115,29 +117,6 @@ DWORD RunCaptured(std::wstring cmdline, const std::function<void(const std::wstr
 std::wstring DefragCommand(wchar_t letter, bool analyze) {
     // /U prints progress, /V the full report. /O = the right optimization for the media type.
     return L"\"" + SystemExe(L"defrag.exe") + L"\" " + std::wstring(1, letter) + (analyze ? L": /A /U /V" : L": /O /U /V");
-}
-
-// Starts `file params` elevated (UAC) and waits. Returns its exit code or a Win32 error.
-DWORD RunElevated(const std::wstring& file, const std::wstring& params, const std::function<void()>& whileWaiting = {}) {
-    const HRESULT com = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
-    SHELLEXECUTEINFOW sei{sizeof sei};
-    sei.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI;
-    sei.hwnd = g_main;
-    sei.lpVerb = L"runas";
-    sei.lpFile = file.c_str();
-    sei.lpParameters = params.c_str();
-    sei.nShow = SW_HIDE;
-    DWORD result;
-    if (!ShellExecuteExW(&sei)) {
-        result = GetLastError();
-    } else {
-        while (WaitForSingleObject(sei.hProcess, 150) == WAIT_TIMEOUT)
-            if (whileWaiting) whileWaiting();
-        if (!GetExitCodeProcess(sei.hProcess, &result)) result = GetLastError();
-        CloseHandle(sei.hProcess);
-    }
-    if (SUCCEEDED(com)) CoUninitialize();
-    return result;
 }
 
 // Interprets a defrag.exe output line: progress, stage name, fragmentation.
@@ -342,6 +321,25 @@ OptimizeResult RunOptimization(wchar_t letter, bool analyzeOnly, std::stop_token
     return r;
 }
 
+// The caller creates the progress file before starting the helper, so the elevated process only
+// ever appends to an existing plain file named like ours: it never creates a file elsewhere and
+// never follows a link to one.
+HANDLE OpenProgressFile(const std::wstring& file) {
+    const size_t slash = file.find_last_of(L"\\/");
+    const std::wstring name = ToLower(slash == std::wstring::npos ? file : file.substr(slash + 1));
+    if (!name.starts_with(L"mtm-optimize-") || !name.ends_with(L".mtmopt")) return INVALID_HANDLE_VALUE;
+    HANDLE h = CreateFileW(file.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
+                           FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return h;
+    BY_HANDLE_FILE_INFORMATION info{};
+    if (!GetFileInformationByHandle(h, &info) ||
+        (info.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT))) {
+        CloseHandle(h);
+        return INVALID_HANDLE_VALUE;
+    }
+    return h;
+}
+
 bool HandleOptimizeCommandLine(int& exitCode) {
     int argc = 0;
     LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
@@ -349,21 +347,22 @@ bool HandleOptimizeCommandLine(int& exitCode) {
     const bool match = argc >= 2 && wcscmp(argv[1], L"--optimize") == 0;
     if (match) {
         exitCode = ERROR_INVALID_PARAMETER;
-        // Strictly validated: one drive letter, a known mode, and our own temp-file pattern.
+        // Strictly validated: one drive letter, a known mode, and our own progress file.
         const std::wstring file = argc == 5 ? argv[4] : L"";
         const bool okLetter = argc == 5 && wcslen(argv[2]) == 1 && iswalpha(argv[2][0]);
         const bool okMode = argc == 5 && (wcscmp(argv[3], L"analyze") == 0 || wcscmp(argv[3], L"optimize") == 0);
-        const bool okFile = file.size() > 7 && ToLower(file).rfind(L".mtmopt") == file.size() - 7;
-        if (okLetter && okMode && okFile) {
-            std::ofstream out(file, std::ios::binary | std::ios::app);
+        HANDLE out = okLetter && okMode ? OpenProgressFile(file) : INVALID_HANDLE_VALUE;
+        if (out != INVALID_HANDLE_VALUE) {
             const std::wstring stopFile = file + L".stop";
             exitCode = static_cast<int>(RunCaptured(
                 DefragCommand(static_cast<wchar_t>(towupper(argv[2][0])), wcscmp(argv[3], L"analyze") == 0),
                 [&](const std::wstring& line) {
-                    out << ToUtf8(line) << '\n';
-                    out.flush();
+                    const std::string text = ToUtf8(line) + "\n";
+                    DWORD written = 0;
+                    WriteFile(out, text.data(), static_cast<DWORD>(text.size()), &written, nullptr);
                 },
                 [&] { return GetFileAttributesW(stopFile.c_str()) != INVALID_FILE_ATTRIBUTES; }));
+            CloseHandle(out);
         }
     }
     LocalFree(argv);

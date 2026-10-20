@@ -3,6 +3,8 @@
 
 #include "net.h"
 
+#include "power.h"
+
 #include <iphlpapi.h>
 #include <objbase.h>
 #include <shellapi.h>
@@ -479,28 +481,9 @@ DWORD ApplyDns(const std::wstring& adapterGuid, const std::vector<std::wstring>&
 
 DWORD ApplyDnsElevated(const std::wstring& adapterGuid, const std::vector<std::wstring>& v4, const std::vector<std::wstring>& v6) {
     if (IsElevated()) return ApplyDns(adapterGuid, v4, v6);
-    wchar_t exe[MAX_PATH * 2];
-    GetModuleFileNameW(nullptr, exe, ARRAYSIZE(exe));
     const std::wstring params = L"--set-dns " + adapterGuid + L" " + (v4.empty() ? L"-" : Join(v4)) + L" " +
                                 (v6.empty() ? L"-" : Join(v6));
-    const HRESULT com = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
-    SHELLEXECUTEINFOW sei{sizeof sei};
-    sei.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI;
-    sei.hwnd = g_main;
-    sei.lpVerb = L"runas";
-    sei.lpFile = exe;
-    sei.lpParameters = params.c_str();
-    sei.nShow = SW_HIDE;
-    DWORD result;
-    if (!ShellExecuteExW(&sei)) {
-        result = GetLastError();  // ERROR_CANCELLED when the UAC prompt is declined
-    } else {
-        WaitForSingleObject(sei.hProcess, 60000);
-        if (!GetExitCodeProcess(sei.hProcess, &result)) result = GetLastError();
-        if (result == STILL_ACTIVE) result = WAIT_TIMEOUT;
-        CloseHandle(sei.hProcess);
-    }
-    if (SUCCEEDED(com)) CoUninitialize();
+    const DWORD result = RunSelfElevated(params, 60000);
     FlushDnsCache();
     return result;
 }

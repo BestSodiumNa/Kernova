@@ -41,6 +41,21 @@ ParkingState ReadCoreParking();
 // the plan's default. UAC prompt when needed. Blocks.
 DWORD SetCoreParkingDisabled(bool disable);
 
+// Starts `file params` elevated (one UAC prompt) and waits for it, calling `whileWaiting` about
+// every 150 ms. Returns its exit code or a Win32 error (ERROR_CANCELLED when the prompt is
+// declined, WAIT_TIMEOUT when it is still running after `timeoutMs`). Blocks.
+DWORD RunElevated(const std::wstring& file, const std::wstring& params, const std::function<void()>& whileWaiting = {},
+                  DWORD timeoutMs = INFINITE);
+// The same for this exe, which is how every "--xxx" helper is started.
+DWORD RunSelfElevated(const std::wstring& params, DWORD timeoutMs = 10 * 60000);  // a restore point can take minutes
+
+// "{xxxxxxxx-xxxx-...}" and the GUID of the active power plan (false if there is none).
+std::wstring GuidText(const GUID& g);
+bool ActiveScheme(GUID& out);
+// Tries `fn` directly; if Windows says we need admin rights, re-runs this exe elevated
+// with `helperParams` (one UAC prompt) and returns its exit code. Blocks.
+DWORD WithElevation(const std::function<DWORD()>& fn, const std::wstring& helperParams);
+
 // Handles "--power ..." (the elevated helper).
 bool HandlePowerCommandLine(int& exitCode);
 

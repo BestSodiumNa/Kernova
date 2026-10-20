@@ -52,6 +52,9 @@ HWND CreateCombo(std::initializer_list<const wchar_t*> items, int selected = 0);
 // Height of a dropdown when closed (it ignores the height passed to MoveWindow).
 int ComboFieldHeight();
 HWND CreateLabel(const wchar_t* text, DWORD extraStyle = 0);
+// Marks a button, dropdown, edit or slider as sitting on a card, so its rounded corners
+// blend into the card colour instead of the page colour.
+void SetOnCard(HWND control);
 
 // Handlers the main window forwards to.
 bool DrawThemedItem(const DRAWITEMSTRUCT* dis);
