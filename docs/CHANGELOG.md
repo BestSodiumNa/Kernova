@@ -2,6 +2,10 @@
 
 ## 0.2.1
 
+- Game tweaks: the thread-scheduling list now has every combination of slice
+  length, fixed or variable, and foreground boost (13 values), and its help
+  text explains how to read them and says plainly that there are no published
+  measurements of which is best for which game.
 - Closing the app no longer waits up to 5 s for a slow LibreHardwareMonitor or
   OpenHardwareMonitor: a sensor row now has 500 ms, and a slow round shows the
   ACPI reading instead of a half-read one.

@@ -407,6 +407,18 @@ const std::vector<QuantumPreset>& QuantumPresets() {
         {L"Gaming: short, fixed time slices (0x28)", 0x28},
         {L"Windows default: short, variable, 3× boost (0x02)", 0x02},
         {L"Background work: long, fixed (0x18)", 0x18},
+        // Every other combination of length x fixed/variable x foreground boost, so a value a guide or
+        // forum suggests can be picked from the list. The boost is only used by variable slices.
+        {L"Short · variable · high boost (0x26)", 0x26},
+        {L"Short · variable · medium boost (0x25)", 0x25},
+        {L"Short · variable · no boost (0x24)", 0x24},
+        {L"Long · variable · high boost (0x16)", 0x16},
+        {L"Long · variable · medium boost (0x15)", 0x15},
+        {L"Long · variable · no boost (0x14)", 0x14},
+        {L"Short · fixed · high boost (0x2A)", 0x2A},
+        {L"Short · fixed · medium boost (0x29)", 0x29},
+        {L"Long · fixed · high boost (0x1A)", 0x1A},
+        {L"Long · fixed · medium boost (0x19)", 0x19},
     };
     return list;
 }

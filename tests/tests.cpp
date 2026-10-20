@@ -51,6 +51,16 @@ void TestTweakEntries() {
     CHECK(!ValidTweakEntry({L"PCI\\x", L"1", L"4"}));
     CHECK(!ValidTweakEntry({L"PCI\\x", L"1"}));
 
+    // Every scheduler preset must be something the helper accepts, or choosing it would fail after the
+    // UAC prompt; and none may be listed twice.
+    std::vector<DWORD> seen;
+    for (const mtm::QuantumPreset& p : mtm::QuantumPresets()) {
+        CHECK(ValidTweakEntry({L"quantum", std::to_wstring(p.value)}));
+        CHECK(std::find(seen.begin(), seen.end(), p.value) == seen.end());
+        seen.push_back(p.value);
+    }
+    CHECK(seen.size() == 13);  // the three named ones plus the ten other length/fixed/boost combinations
+
     // Values that don't fit what the helper may write (these are what the backup refuses to record).
     CHECK(!ValidTweakEntry({L"quantum", L"2147483648"}));
     CHECK(!ValidTweakEntry({L"usb", L"{x}", L"4294967295", L"0"}));

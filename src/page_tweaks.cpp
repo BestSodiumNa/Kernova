@@ -34,10 +34,20 @@ std::vector<TipSection> QuantumTip() {
              L"Sets Win32PrioritySeparation: how long each thread may run before Windows switches to another (its "
              L"quantum), and whether the window you're using gets longer slices. Applies instantly."},
             {L"The choices",
-             L"Gaming (0x28): short, equal slices for every thread, for steady frame pacing. Windows default (0x02): "
-             L"short slices with a 3× boost for the app in front. Background work (0x18): long slices, better for "
-             L"rendering and compiling while you're away."},
-            {L"What to expect", L"Differences are small and depend on the game; try it and compare."}};
+             L"Every value combines three things: slice length (short or long), fixed or variable, and the foreground "
+             L"boost (none, medium 2×, high 3×) that gives the window in front longer slices. Gaming (0x28): short, "
+             L"equal slices for every thread. Windows default (0x02): short slices with a 3× boost for the app in "
+             L"front. Background work (0x18): long slices, better for rendering and compiling while you're away. The "
+             L"rest of the list is the other combinations, for values that guides and forums suggest."},
+            {L"Fixed values",
+             L"Windows only applies the foreground boost to variable slices, so the fixed values that differ only in "
+             L"boost (0x28, 0x29, 0x2A, and 0x18, 0x19, 0x1A) should behave the same. They are listed because guides "
+             L"list them separately."},
+            {L"Which one is best for a game?",
+             L"Nobody has published measurements. Forum reports disagree: one Fortnite player preferred 0x16, another "
+             L"found 0x26 or 0x2A smoother, and short fixed slices (0x28) are said to help response time on a PC with "
+             L"many processes. The effect is small and depends on your CPU, its core count and what else is running, "
+             L"so try one for a play session and compare how it feels. \"Restore original\" puts it back."}};
 }
 std::vector<TipSection> UsbTip() {
     return {{L"What it does",
