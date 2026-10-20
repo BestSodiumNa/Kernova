@@ -333,11 +333,14 @@ private:
                 else if (pointFailed && r == ERROR_SERVICE_DISABLED)
                     SetText(status_, L"Nothing changed: System Protection is off for your system drive. Turn it on under "
                                      L"System Restore… → Configure, or switch off \"Restore point first\".");
+                else if (pointFailed && r == ERROR_ALREADY_EXISTS)
+                    SetText(status_, L"Nothing changed: a setting from an earlier run couldn't be put back yet. Run Kernova as "
+                                     L"administrator and try again.");
                 else if (pointFailed) SetText(status_, L"Couldn't create the restore point, so nothing was changed: " + ErrorText(r));
                 else SetText(status_, L"Couldn't change it: " + ErrorText(r));
                 Refresh();
-                // Failures get a dialog too: the status line alone is easy to miss.
-                if (r != ERROR_SUCCESS && r != ERROR_CANCELLED) ShowError(GetText(status_));
+                // Failures get a dialog too: the status line alone is easy to miss. A skipped setting isn't a failure.
+                if (r != ERROR_SUCCESS && r != ERROR_CANCELLED && r != kTweakLeftUnchanged) ShowError(GetText(status_));
             });
         });
     }

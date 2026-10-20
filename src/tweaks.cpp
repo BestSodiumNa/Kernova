@@ -469,7 +469,9 @@ DWORD RunTweaks(const std::vector<TweakRequest>& requests, bool restorePointFirs
         }
         ops.push_back(std::move(op));
     }
-    if (ops.empty() && !restorePointFirst) return leftUnchanged ? kTweakLeftUnchanged : ERROR_SUCCESS;
+    // Nothing to apply: no admin prompt, and no restore point for a change that isn't happening.
+    // (Only the "make a restore point" button asks for one with no tweaks, and then leftUnchanged is 0.)
+    if (ops.empty() && (!restorePointFirst || leftUnchanged)) return leftUnchanged ? kTweakLeftUnchanged : ERROR_SUCCESS;
     // Written before anything changes: without the safety net nothing is applied.
     if (!SaveBackup(backup)) return ERROR_WRITE_FAULT;
 
