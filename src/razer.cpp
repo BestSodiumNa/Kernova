@@ -4,6 +4,7 @@
 #include <setupapi.h>
 
 #include <algorithm>
+#include <map>
 #include <mutex>
 #include <thread>
 
@@ -23,7 +24,23 @@ struct Reply {
     BYTE args[80] = {};
 };
 
-Reply Command(const RazerMouse& m, BYTE cls, BYTE id, BYTE size, const std::vector<BYTE>& args = {}) {
+// The transaction id is part of every packet, and which one a mouse accepts depends on the model:
+// 0x1F on newer ones (the DeathAdder V3 Pro, tested), 0x3F or 0xFF on some older ones such as
+// early Vipers (per the OpenRazer project; not tested on those here). So it is found once per
+// mouse by asking for the firmware version, then remembered by device path.
+constexpr BYTE kTransactionIds[] = {0x1F, 0x3F, 0xFF};
+std::map<std::wstring, BYTE> g_transaction;  // guarded by g_razerLock
+
+BYTE KnownTransaction(const std::wstring& path) {
+    std::lock_guard lock(g_razerLock);
+    const auto it = g_transaction.find(path);
+    return it == g_transaction.end() ? kTransactionIds[0] : it->second;
+}
+
+// `transaction` < 0 = the one remembered for this mouse.
+Reply Command(const RazerMouse& m, BYTE cls, BYTE id, BYTE size, const std::vector<BYTE>& args = {},
+              int transaction = -1) {
+    const BYTE txn = transaction >= 0 ? static_cast<BYTE>(transaction) : KnownTransaction(m.path);
     std::lock_guard lock(g_razerLock);
     Reply out;
     // Zero access is enough for feature reports, and works while Windows (and Synapse) use the mouse.
@@ -33,7 +50,7 @@ Reply Command(const RazerMouse& m, BYTE cls, BYTE id, BYTE size, const std::vect
         return out;
     }
     BYTE req[kReportLen] = {};
-    req[2] = 0x1F;  // transaction id
+    req[2] = txn;
     req[6] = size;
     req[7] = cls;
     req[8] = id;
@@ -69,6 +86,22 @@ Reply Command(const RazerMouse& m, BYTE cls, BYTE id, BYTE size, const std::vect
 // Polling-rate codes: the classic command (125-1000 Hz) and the newer one (up to 8000 Hz).
 constexpr std::pair<int, BYTE> kClassicRates[] = {{1000, 0x01}, {500, 0x02}, {125, 0x08}};
 constexpr std::pair<int, BYTE> kExtendedRates[] = {{8000, 0x01}, {4000, 0x02}, {2000, 0x04}, {1000, 0x08}, {500, 0x10}, {125, 0x40}};
+
+// Asks for the firmware version with each transaction id in turn (the remembered one first) and
+// remembers the one that is answered. False when none is: asleep, out of range, or not a protocol mouse.
+bool Identify(const RazerMouse& m, Reply& firmware) {
+    std::vector<BYTE> order = {KnownTransaction(m.path)};
+    for (BYTE t : kTransactionIds)
+        if (t != order[0]) order.push_back(t);
+    for (BYTE t : order) {
+        firmware = Command(m, 0x00, 0x81, 0x02, {}, t);
+        if (firmware.error != ERROR_SUCCESS) continue;
+        std::lock_guard lock(g_razerLock);
+        g_transaction[m.path] = t;
+        return true;
+    }
+    return false;
+}
 
 }  // namespace
 
@@ -110,9 +143,9 @@ std::vector<RazerMouse> FindRazerMice() {
 
 RazerState ReadRazer(const RazerMouse& m) {
     RazerState s;
-    if (const Reply r = Command(m, 0x00, 0x81, 0x02); r.error == ERROR_SUCCESS) {
+    if (Reply fw; Identify(m, fw)) {
         s.ok = true;
-        s.firmware = Format(L"%u.%u", r.args[0], r.args[1]);
+        s.firmware = Format(L"%u.%u", fw.args[0], fw.args[1]);
     }
     if (!s.ok) return s;  // asleep, out of range or not a protocol mouse
     const Reply battery = Command(m, 0x07, 0x80, 0x02);

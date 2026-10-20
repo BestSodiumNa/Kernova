@@ -14,7 +14,10 @@
 - Input tester page: mouse polling rate over time, buttons and wheel, keyboard
   key test and rollover, and key depth on Wooting analog keyboards.
 - Mouse settings page: battery, DPI stages, custom DPI and polling rate (up to
-  8000 Hz) for Razer mice, plus Windows' "enhance pointer precision".
+  8000 Hz) for Razer mice, plus Windows' "enhance pointer precision". Tested
+  on the DeathAdder V3 Pro. The protocol's transaction id is detected per
+  mouse (0x1F, 0x3F or 0xFF), so other models such as the Viper family should
+  work too, but they are untested.
 - The elevated `--optimize` helper only appends to an existing progress file
   named like the one the app creates, and never follows a link elsewhere.
 - Tweak backups are written atomically, so a crash can't leave an empty

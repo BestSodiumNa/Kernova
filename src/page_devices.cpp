@@ -46,7 +46,8 @@ public:
             {{L"Razer mice",
               L"Kernova talks to the mouse directly, the same way Razer Synapse does, so Synapse isn't needed. Changes "
               L"are saved inside the mouse and survive unplugging. If Synapse is running it may apply its own profile "
-              L"over them."},
+              L"over them. Tested on the DeathAdder V3 Pro; other Razer mice (such as the Viper family) use the same "
+              L"protocol and are tried the same way, but a model may refuse some settings."},
              {L"Polling rate",
               L"How often the mouse reports its position. 1000 Hz is the usual sweet spot; 2000-8000 Hz needs a mouse "
               L"and receiver that support it (Razer HyperPolling) and costs more CPU time and battery."},

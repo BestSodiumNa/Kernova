@@ -22,7 +22,7 @@ there is no licensing or network activation code.
 | Flight Recorder | Records system and top-process samples to a `.mtmtrace` file, or saves the in-memory buffer (about an hour at 1 Hz) | PDH, `NtQuerySystemInformation`, memory-mapped file I/O |
 | Benchmarks | CPU (FP64, single + multi), GPU (D3D11 compute), Disk (sequential + 4K random) | `std::thread`, Direct3D 11, unbuffered file I/O |
 | Input tester | Mouse polling rate over time, buttons and wheel, keyboard key test and rollover; key depth on Wooting analog keyboards. Only reads input while Kernova is the active window | Raw Input, USB hub descriptors, HID |
-| Mouse settings | Razer mice: battery, DPI stages and custom DPI, polling rate up to 8000 Hz; Windows "enhance pointer precision" | HID feature reports, `SystemParametersInfo` |
+| Mouse settings | Razer mice (tested on the DeathAdder V3 Pro; others such as the Viper family use the same protocol but are untested): battery, DPI stages and custom DPI, polling rate up to 8000 Hz; Windows "enhance pointer precision" | HID feature reports, `SystemParametersInfo` |
 
 Right-click rows for actions. F5 refreshes, Ctrl+Tab / Ctrl+Shift+Tab switch pages.
 
