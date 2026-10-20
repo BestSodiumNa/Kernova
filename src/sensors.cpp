@@ -46,8 +46,15 @@ bool Connect(Wmi& w) {
     return true;
 }
 
+// Longest the sensor thread waits for one more row. The app waits for this thread when it exits, so
+// this bounds how long closing can stall. It does not cover ExecQuery or ConnectServer themselves.
+constexpr LONG kWmiRowTimeoutMs = 500;
+
 // Package temperature if the monitor reports one, else the hottest CPU sensor. -1 if none.
-double QueryCpu(IWbemServices* svc) {
+// `timedOut` is set when a row didn't arrive in time: the monitor is slow, not gone, and what was
+// read so far may lack the package sensor, so the result is -1 for this round.
+double QueryCpu(IWbemServices* svc, bool& timedOut) {
+    timedOut = false;
     BSTR lang = SysAllocString(L"WQL");
     BSTR query = SysAllocString(L"SELECT Name, Identifier, Value FROM Sensor WHERE SensorType='Temperature'");
     IEnumWbemClassObject* en = nullptr;
@@ -60,7 +67,12 @@ double QueryCpu(IWbemServices* svc) {
     for (;;) {
         IWbemClassObject* obj = nullptr;
         ULONG n = 0;
-        if (en->Next(5000, 1, &obj, &n) != S_OK || !n) break;
+        const HRESULT next = en->Next(kWmiRowTimeoutMs, 1, &obj, &n);
+        if (next == WBEM_S_TIMEDOUT) {
+            timedOut = true;
+            break;
+        }
+        if (next != S_OK || !n) break;
         VARIANT id, name, val;
         VariantInit(&id);
         VariantInit(&name);
@@ -82,6 +94,7 @@ double QueryCpu(IWbemServices* svc) {
         obj->Release();
     }
     en->Release();
+    if (timedOut) return -1;
     return package >= 0 ? package : hottest;
 }
 
@@ -155,11 +168,13 @@ private:
             for (Wmi& m : monitors) {
                 // A missing namespace fails fast but not free; recheck it every 10th cycle.
                 if (!m.svc && (cycle % 10 != 0 || !Connect(m))) continue;
-                const double c = QueryCpu(m.svc);
+                bool timedOut = false;
+                const double c = QueryCpu(m.svc, timedOut);
                 if (c >= 0) {
                     t = {c, m.label};
                     break;
                 }
+                if (timedOut) break;  // slow this round: keep the connection, show the ACPI value for now
                 m.svc->Release();  // monitor closed: drop the connection and look again later
                 m.svc = nullptr;
             }
