@@ -13,6 +13,8 @@
 #include <algorithm>
 #include <cmath>
 #include <atomic>
+#include <functional>
+#include <stop_token>
 #include <thread>
 
 namespace mtm {
