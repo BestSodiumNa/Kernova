@@ -48,7 +48,15 @@ The four elevated helpers are:
   System Restore point and stops without changing anything if that fails.
   To do so it temporarily sets `SystemRestorePointCreationFrequency` under
   `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SystemRestore` to 0 and
-  puts it back afterwards (removing it again if it wasn't set before).
+  puts it back afterwards (removing it again if it wasn't set before). The
+  original is first parked as text in a second value, `KernovaSavedFrequency`,
+  in the same key. If the helper is killed while the limit is lifted, the next
+  `--tweak` run puts the original back and removes the parked value. If a
+  parked value is already there, no restore point is made and nothing is
+  applied.
+
+  A setting whose current value is outside the ranges above (so Undo could not
+  write it back) is left exactly as it is, and the Game tweaks page says so.
 
 Disk optimization settings (the Windows scheduled defrag task) are changed by
 running `schtasks.exe` elevated with a fixed argument list, not through
@@ -58,6 +66,18 @@ If you find a way to make any of these do something outside its documented
 shape — especially if it lets you pass a path, a shell command, or an
 arbitrary registry key — please report it. The parsers are intended to be
 strict; anything they accept beyond what's listed above is a bug.
+
+## Where to put the program
+
+To get administrator rights, Kernova starts its own exe again with the `runas`
+verb, so Windows shows one UAC prompt for the file at that path. If the exe sits
+in a folder that your account (or any program running as you) can write to, such
+as Downloads, a program running as you could replace the file before you accept
+the prompt, and you would be approving something else. This is true of every
+portable program that elevates itself. Run Kernova from a folder that only
+administrators can write to, such as `C:\Program Files\Kernova`, if that matters
+to you. Kernova does not check this itself: a check could not stop a program that
+can write to the folder.
 
 ## Temperature sensors
 

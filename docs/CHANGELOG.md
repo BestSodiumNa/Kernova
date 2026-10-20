@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.1
+
+- Closing the app no longer waits up to 5 s for a slow LibreHardwareMonitor or
+  OpenHardwareMonitor: a sensor row now has 500 ms, and a slow round shows the
+  ACPI reading instead of a half-read one.
+- Game tweaks read registry values with their full range. A value from
+  `0x80000000` up used to look "not set", so Undo could have deleted the real
+  value. A setting whose current value Kernova can't restore later is now left
+  as it is, and the page says so.
+- If the helper is killed while the restore-point limit is lifted, the next
+  game-tweaks run puts `SystemRestorePointCreationFrequency` back.
+- `security.md` explains why to run Kernova from a folder only administrators
+  can write to.
+
 ## 0.2.0
 
 - CPU, GPU and disk temperatures on the Summary and Performance pages. GPU

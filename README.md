@@ -29,7 +29,9 @@ Right-click rows for actions. F5 refreshes, Ctrl+Tab / Ctrl+Shift+Tab switch pag
 **Look:** dark, light or "match Windows" theme, five accent colours, update speed and always-on-top are in **Settings** (bottom of the sidebar); the sun/moon item toggles dark/light. Number columns are heat-shaded like Windows Task Manager, and the footer shows live CPU / memory / GPU / disk / network.
 
 Some actions (other users' processes, services, all-users startup items) need
-**Settings > Restart as administrator**.
+**Settings > Restart as administrator**. For actions that ask for administrator rights, run
+Kernova from a folder only administrators can write to (for example `C:\Program Files\Kernova`);
+see [Security](docs/security.md#where-to-put-the-program).
 
 ## Build
 
