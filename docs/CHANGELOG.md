@@ -2,6 +2,16 @@
 
 ## 0.2.1
 
+- New Latency test page. It compares the thread-scheduling settings on your PC
+  the way DPC latency checkers report latency: a thread asks a high-resolution
+  timer for 1 ms sleeps and records how late it wakes, with every core busy
+  (typical, 99th percentile and worst, in microseconds). One admin prompt, about
+  2 minutes; your original setting is put back afterwards, and if the test is
+  killed the next game-tweaks run (or opening the page) repairs it.
+- The scheduling choice is no longer marked "(recommended)", and "Apply all
+  recommended" leaves it alone: no measurement says which value is best.
+- The sidebar spaces its entries to fit a short window, now that there are 17.
+
 - Game tweaks: the thread-scheduling list now has every combination of slice
   length, fixed or variable, and foreground boost (13 values), and its help
   text explains how to read them and says plainly that there are no published

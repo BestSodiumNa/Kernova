@@ -43,9 +43,13 @@ std::wstring NumOpt(std::optional<DWORD> v) { return v ? std::to_wstring(*v) : L
 // sibling value. If the process dies before the setting is put back, UnparkDword (run at the
 // start of the next elevated helper) repairs it. Refuses to park over an earlier parked value:
 // that one is the real original.
-DWORD ParkDword(HKEY root, const wchar_t* sub, const wchar_t* name, const wchar_t* parkedName) {
+bool ParkedDwordExists(HKEY root, const wchar_t* sub, const wchar_t* parkedName) {
     DWORD size = 0;
-    if (RegGetValueW(root, sub, parkedName, RRF_RT_ANY, nullptr, nullptr, &size) == ERROR_SUCCESS) return ERROR_ALREADY_EXISTS;
+    return RegGetValueW(root, sub, parkedName, RRF_RT_ANY, nullptr, nullptr, &size) == ERROR_SUCCESS;
+}
+
+DWORD ParkDword(HKEY root, const wchar_t* sub, const wchar_t* name, const wchar_t* parkedName) {
+    if (ParkedDwordExists(root, sub, parkedName)) return ERROR_ALREADY_EXISTS;
     const std::wstring text = NumOpt(ReadDword(root, sub, name));
     return DWORD(RegSetKeyValueW(root, sub, parkedName, REG_SZ, text.c_str(), DWORD((text.size() + 1) * sizeof(wchar_t))));
 }
@@ -81,8 +85,6 @@ constexpr GUID kUsbSuspend = {0x48e6b7a6, 0x50f5, 0x4782, {0xa5, 0xd4, 0x53, 0xb
 
 constexpr wchar_t kMsiKey[] = L"Interrupt Management\\MessageSignaledInterruptProperties";
 constexpr wchar_t kAffinityKey[] = L"Interrupt Management\\Affinity Policy";
-constexpr wchar_t kPriorityControl[] = L"SYSTEM\\CurrentControlSet\\Control\\PriorityControl";
-constexpr wchar_t kQuantumValue[] = L"Win32PrioritySeparation";
 
 // ---- small helpers ------------------------------------------------------------------
 
@@ -230,7 +232,7 @@ DWORD WriteGpu(const std::wstring& instanceId, int msi, int priority) {
 
 // ---- quantum / USB ------------------------------------------------------------------
 
-DWORD WriteQuantum(int value) { return WriteDword(HKEY_LOCAL_MACHINE, kPriorityControl, kQuantumValue, Opt(value)); }
+DWORD WriteQuantum(int value) { return WriteDword(HKEY_LOCAL_MACHINE, kPriorityControlKey, kQuantumValueName, Opt(value)); }
 
 DWORD WriteUsb(const GUID& scheme, DWORD ac, DWORD dc) {
     DWORD r = PowerWriteACValueIndex(nullptr, &scheme, &kSubUsb, &kUsbSuspend, ac);
@@ -263,7 +265,7 @@ bool ValidEntry(const Entry& e);
 Entry CurrentEntry(const Entry& like, bool* unusual = nullptr) {
     Entry raw;
     if (IsQuantum(like)) {
-        raw = {like[0], NumOpt(ReadDword(HKEY_LOCAL_MACHINE, kPriorityControl, kQuantumValue))};
+        raw = {like[0], NumOpt(ReadDword(HKEY_LOCAL_MACHINE, kPriorityControlKey, kQuantumValueName))};
     } else if (IsUsb(like)) {
         GUID g{};
         DWORD ac = 0, dc = 0;
@@ -323,6 +325,9 @@ void RepairRestoreFrequency() {
     UnparkDword(HKEY_LOCAL_MACHINE, kSystemRestoreKey, kRestoreFrequency, kParkedFrequency);
 }
 
+// Puts the scheduler value back if a latency test was killed while it was stepping through values.
+void RepairQuantum() { UnparkDword(HKEY_LOCAL_MACHINE, kPriorityControlKey, kQuantumValueName, kParkedQuantum); }
+
 // Elevated. Windows quietly skips a new restore point when one was made in the last 24 hours,
 // so that limit is lifted for this one call and put back straight after. The original is parked
 // first, so if this process is killed in between, the next helper run repairs it.
@@ -358,6 +363,7 @@ constexpr DWORD kPointFailedBit = 0x20000000;
 // Elevated. A failed restore point stops everything: no tweak is applied without its safety net.
 DWORD WriteAll(bool restorePoint, const std::vector<Entry>& entries) {
     RepairRestoreFrequency();  // an earlier run may have been killed while the limit was lifted
+    RepairQuantum();           // ... or a latency test while it was stepping through scheduler values
     if (restorePoint)
         if (const DWORD r = MakeRestorePoint(); r != ERROR_SUCCESS) return r | kPointFailedBit;
     DWORD first = ERROR_SUCCESS;
@@ -384,7 +390,7 @@ std::vector<GpuInterrupts> ListGpuInterrupts() {
 
 QuantumState ReadQuantum() {
     QuantumState s;
-    const std::optional<DWORD> v = ReadDword(HKEY_LOCAL_MACHINE, kPriorityControl, kQuantumValue);
+    const std::optional<DWORD> v = ReadDword(HKEY_LOCAL_MACHINE, kPriorityControlKey, kQuantumValueName);
     s.exists = v.has_value();
     if (v) s.value = *v;
     return s;
@@ -447,6 +453,12 @@ DWORD RunTweaks(const std::vector<TweakRequest>& requests, bool restorePointFirs
         Entry target, original;
         bool undo = false, added = false;
     };
+    // A cut-short latency test leaves the scheduler value at one of its test values. Reading that as the
+    // "original" would make Undo restore the test value, so it is put right first (admin prompt).
+    if (ParkedDwordExists(HKEY_LOCAL_MACHINE, kPriorityControlKey, kParkedQuantum)) {
+        if (IsElevated()) RepairQuantum();
+        else if (const DWORD repaired = RunSelfElevated(L"--tweak"); repaired != ERROR_SUCCESS) return repaired;
+    }
     std::vector<Op> ops;
     int leftUnchanged = 0;  // settings skipped because their current value can't be restored later
     std::vector<Entry> backup = LoadBackup();

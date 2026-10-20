@@ -3,6 +3,7 @@
 #include "graph.h"
 #include "defrag.h"
 #include "icons.h"
+#include "latency.h"
 #include "net.h"
 #include "page.h"
 #include "power.h"
@@ -64,6 +65,7 @@ const wchar_t kPageIcons[] = {
     0xE716,  // Users
     0xE945,  // Power & frequency
     0xE7FC,  // Game tweaks
+    0xE916,  // Latency test (Stopwatch)
     0xEDA2,  // Disk space
     0xE95E,  // Drive Health (Health)
     0xE774,  // Connections
@@ -87,11 +89,20 @@ int NavTop() { return Scale(92); }
 RECT NavItemRect(int id) {
     RECT client;
     GetClientRect(g_main, &client);
-    const int x = Scale(12), w = SidebarWidth() - Scale(24), h = NavItemHeight();
-    int y;
-    if (id == kNavTheme) y = client.bottom - Scale(16) - 2 * h;
-    else if (id == kNavSettings) y = client.bottom - Scale(16) - h;
-    else y = NavTop() + id * (h + Scale(2));
+    const int x = Scale(12), w = SidebarWidth() - Scale(24), full = NavItemHeight();
+    int y, h = full;
+    if (id == kNavTheme) {
+        y = client.bottom - Scale(16) - 2 * full;
+    } else if (id == kNavSettings) {
+        y = client.bottom - Scale(16) - full;
+    } else {
+        // The page entries share the room above the theme/settings buttons: full size when there is
+        // plenty, closer together on a short window, so a long page list never runs into them.
+        const int room = client.bottom - NavTop() - (Scale(16) + 2 * full + Scale(8));
+        const int pitch = std::clamp(room / std::max<int>(1, int(g_pages.size())), Scale(30), full + Scale(2));
+        h = pitch - Scale(2);
+        y = NavTop() + id * pitch;
+    }
     return RECT{x, y, x + w, y + h};
 }
 
@@ -584,6 +595,7 @@ void OnCreate(HWND hwnd) {
     g_pages.push_back(MakeUsersPage());
     g_pages.push_back(MakePowerPage());
     g_pages.push_back(MakeTweaksPage());
+    g_pages.push_back(MakeLatencyPage());
     g_pages.push_back(MakeDiskSpacePage());
     g_pages.push_back(MakeHealthPage());
     g_pages.push_back(MakeConnectionsPage());
@@ -778,6 +790,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCmd) {
     if (int code = 0; HandleOptimizeCommandLine(code)) return code;  // elevated defrag / TRIM helper
     if (int code = 0; HandlePowerCommandLine(code)) return code;     // elevated power-plan / parking helper
     if (int code = 0; HandleTweakCommandLine(code)) return code;     // elevated game-tweaks helper
+    if (int code = 0; HandleLatencyCommandLine(code)) return code;   // elevated latency-test helper + its background load
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     g_inst = instance;
 

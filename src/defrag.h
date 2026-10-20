@@ -47,6 +47,12 @@ OptimizeResult RunOptimization(wchar_t letter, bool analyzeOnly, std::stop_token
 // Handles "--optimize <letter> <analyze|optimize> <progress file>" (the elevated helper).
 bool HandleOptimizeCommandLine(int& exitCode);
 
+// How every elevated helper that reports progress opens its progress file: for append only, and
+// only an existing plain file (no directory, no link) whose name starts with `prefix` and ends with
+// `extension` (both lower case). The app creates the file first, so the helper never creates one
+// at a path it was handed. INVALID_HANDLE_VALUE when the file is not acceptable.
+HANDLE OpenProgressFile(const std::wstring& file, const wchar_t* prefix, const wchar_t* extension);
+
 // Reminder interval in days (0 = off), stored in settings. Default 30.
 int OptimizeReminderDays();
 void SetOptimizeReminderDays(int days);

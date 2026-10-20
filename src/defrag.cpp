@@ -324,10 +324,10 @@ OptimizeResult RunOptimization(wchar_t letter, bool analyzeOnly, std::stop_token
 // The caller creates the progress file before starting the helper, so the elevated process only
 // ever appends to an existing plain file named like ours: it never creates a file elsewhere and
 // never follows a link to one.
-HANDLE OpenProgressFile(const std::wstring& file) {
+HANDLE OpenProgressFile(const std::wstring& file, const wchar_t* prefix, const wchar_t* extension) {
     const size_t slash = file.find_last_of(L"\\/");
     const std::wstring name = ToLower(slash == std::wstring::npos ? file : file.substr(slash + 1));
-    if (!name.starts_with(L"mtm-optimize-") || !name.ends_with(L".mtmopt")) return INVALID_HANDLE_VALUE;
+    if (!name.starts_with(prefix) || !name.ends_with(extension)) return INVALID_HANDLE_VALUE;
     HANDLE h = CreateFileW(file.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
                            FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
     if (h == INVALID_HANDLE_VALUE) return h;
@@ -351,7 +351,7 @@ bool HandleOptimizeCommandLine(int& exitCode) {
         const std::wstring file = argc == 5 ? argv[4] : L"";
         const bool okLetter = argc == 5 && wcslen(argv[2]) == 1 && iswalpha(argv[2][0]);
         const bool okMode = argc == 5 && (wcscmp(argv[3], L"analyze") == 0 || wcscmp(argv[3], L"optimize") == 0);
-        HANDLE out = okLetter && okMode ? OpenProgressFile(file) : INVALID_HANDLE_VALUE;
+        HANDLE out = okLetter && okMode ? OpenProgressFile(file, L"mtm-optimize-", L".mtmopt") : INVALID_HANDLE_VALUE;
         if (out != INVALID_HANDLE_VALUE) {
             const std::wstring stopFile = file + L".stop";
             exitCode = static_cast<int>(RunCaptured(

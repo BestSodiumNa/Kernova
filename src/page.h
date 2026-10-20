@@ -44,6 +44,7 @@ std::unique_ptr<Page> MakeBenchmarksPage();
 std::unique_ptr<Page> MakeRecorderPage();
 std::unique_ptr<Page> MakeHealthPage();
 std::unique_ptr<Page> MakeTweaksPage();
+std::unique_ptr<Page> MakeLatencyPage();
 std::unique_ptr<Page> MakeInputPage();
 std::unique_ptr<Page> MakeDevicesPage();
 

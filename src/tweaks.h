@@ -71,6 +71,12 @@ bool HandleTweakCommandLine(int& exitCode);
 // Exposed so the tests can pin down what the helper is willing to write.
 bool ValidTweakEntry(const std::vector<std::wstring>& entry);
 
+// Where Win32PrioritySeparation lives, and the sibling value that holds its original while the
+// latency test (latency.cpp) steps through other values. Both are under the same key.
+constexpr wchar_t kPriorityControlKey[] = L"SYSTEM\\CurrentControlSet\\Control\\PriorityControl";
+constexpr wchar_t kQuantumValueName[] = L"Win32PrioritySeparation";
+constexpr wchar_t kParkedQuantum[] = L"KernovaSavedPrioritySeparation";
+
 // Registry DWORD helpers, exposed for the tests. nullopt = not set / remove the value.
 std::optional<DWORD> ReadDword(HKEY root, const wchar_t* sub, const wchar_t* name);
 DWORD WriteDword(HKEY root, const wchar_t* sub, const wchar_t* name, std::optional<DWORD> value);
@@ -79,5 +85,7 @@ DWORD WriteDword(HKEY root, const wchar_t* sub, const wchar_t* name, std::option
 // repaired). ParkDword refuses to overwrite an earlier parked value (ERROR_ALREADY_EXISTS).
 DWORD ParkDword(HKEY root, const wchar_t* sub, const wchar_t* name, const wchar_t* parkedName);
 DWORD UnparkDword(HKEY root, const wchar_t* sub, const wchar_t* name, const wchar_t* parkedName);
+// True while something is parked: a run was cut short and its setting still needs putting back.
+bool ParkedDwordExists(HKEY root, const wchar_t* sub, const wchar_t* parkedName);
 
 }  // namespace mtm

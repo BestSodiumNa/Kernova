@@ -47,7 +47,8 @@ std::vector<TipSection> QuantumTip() {
              L"Nobody has published measurements. Forum reports disagree: one Fortnite player preferred 0x16, another "
              L"found 0x26 or 0x2A smoother, and short fixed slices (0x28) are said to help response time on a PC with "
              L"many processes. The effect is small and depends on your CPU, its core count and what else is running, "
-             L"so try one for a play session and compare how it feels. \"Restore original\" puts it back."}};
+             L"so try one for a play session and compare how it feels, or use the Latency test page to compare them "
+             L"on this PC. \"Restore original\" puts it back."}};
 }
 std::vector<TipSection> UsbTip() {
     return {{L"What it does",
@@ -176,7 +177,7 @@ private:
         TextCard text;
         InfoBadge info;
         HWND apply = nullptr, combo = nullptr;
-        std::vector<Option> options;  // [0] is the recommended choice
+        std::vector<Option> options;  // [0] is what "Apply all recommended" picks (not used for scheduling)
         int current = -1;             // option matching what's set now, -1 = none
         bool backup = false, known = false;  // known: the setting could be read
     };
@@ -236,7 +237,6 @@ private:
             } else if (c.kind == Kind::Quantum) {
                 c.options.clear();
                 for (const QuantumPreset& p : QuantumPresets()) c.options.push_back({p.name, int(p.value)});
-                c.options[0].label += L" (recommended)";
                 cur1 = int(q.value);
                 now = DescribeQuantum(q.value);
                 hint = L"How Windows shares CPU time between programs. Takes effect immediately.";
@@ -282,7 +282,7 @@ private:
             EnableWindow(c->combo, !busy_ && c->known);
             EnableWindow(c->apply, !busy_ && c->known && sel >= 0 && sel != c->current);
             anyBackup |= c->backup;
-            anyToApply |= c->known && c->current != 0;
+            anyToApply |= c->known && c->current != 0 && c->kind != Kind::Quantum;  // no evidence-based default for it
         }
         EnableWindow(applyAll_, !busy_ && anyToApply);
         EnableWindow(undoAll_, !busy_ && anyBackup);
@@ -294,7 +294,9 @@ private:
         std::vector<TweakRequest> reqs;
         bool gpu = false;
         for (auto& c : cards_) {
-            if (undo ? !c->backup : (!c->known || c->current == 0)) continue;
+            // "Apply all recommended" leaves the scheduling setting alone: no measurement says which value is
+            // best, so it is only changed from its own card (the Latency test page compares them).
+            if (undo ? !c->backup : (!c->known || c->current == 0 || c->kind == Kind::Quantum)) continue;
             reqs.push_back(undo ? Request(*c, c->options.back()) : Request(*c, c->options[0]));
             gpu |= c->kind == Kind::Gpu;
         }

@@ -17,7 +17,7 @@ rights, and those are performed by re-launching the app elevated with a
 specific command-line flag, doing one thing, and exiting. The UI itself never
 runs elevated unless the user explicitly restarts it that way.
 
-The four elevated helpers are:
+The five elevated helpers are:
 
 - `--set-dns <guid> <v4-list> <v6-list>` — changes the DNS servers on the
   network adapter with the given GUID. `<guid>` must parse as a GUID via
@@ -57,6 +57,24 @@ The four elevated helpers are:
 
   A setting whose current value is outside the ranges above (so Undo could not
   write it back) is left exactly as it is, and the Game tweaks page says so.
+
+- `--latency-sweep <progress file> <phaseMs> <rounds> <value>...` — the Latency
+  test page's helper. It steps `Win32PrioritySeparation` through the given
+  values while the app measures, and reports each step in the progress file.
+  `<phaseMs>` must be 2000–30000, `<rounds>` 1–4, and there must be 1–16
+  distinct values, each one the `--tweak` helper would accept (0–63). The
+  progress file is opened like `--optimize`'s: an existing plain file named
+  `mtm-latency-*.mtmlat`, for append only. Before the first step the original
+  value is parked as text in `KernovaSavedPrioritySeparation` next to it, and it
+  is put back when the helper ends. If the helper is killed, the next `--tweak`
+  run puts it back, and the Latency test page offers to do that when it opens.
+  The helper does nothing at all unless it is elevated.
+
+  The test also starts `Kernova.exe --latency-load <parent pid> <threads>` as an
+  ordinary (not elevated) background process. It keeps `<threads>` (1–64) CPU
+  cores busy, and exits when the process named by `<parent pid>` ends, or after
+  15 minutes, so a crash cannot leave it running. It opens nothing and writes
+  nothing.
 
 Disk optimization settings (the Windows scheduled defrag task) are changed by
 running `schtasks.exe` elevated with a fixed argument list, not through
@@ -133,6 +151,8 @@ The app writes to these places:
   anything it wouldn't accept from the command line.
 - `%TEMP%\mtm-optimize-*.mtmopt` — progress of a running disk optimization,
   deleted when it ends.
+- `%TEMP%\mtm-latency-*.mtmlat` — which scheduling value a running latency test
+  has set, deleted when it ends.
 
 Besides these, the Game tweaks page changes Windows settings (listed under
 "Privileged operations" above) and creates a System Restore point. Nothing is

@@ -1,5 +1,7 @@
 // Checks the code that reads untrusted input or decides what the elevated helpers may write.
 // Run with: ctest --test-dir build --output-on-failure   (or build\kernova_tests.exe)
+#include "defrag.h"
+#include "latency.h"
 #include "recorder.h"
 #include "tweaks.h"
 
@@ -65,6 +67,107 @@ void TestTweakEntries() {
     CHECK(!ValidTweakEntry({L"quantum", L"2147483648"}));
     CHECK(!ValidTweakEntry({L"usb", L"{x}", L"4294967295", L"0"}));
     CHECK(!ValidTweakEntry({L"PCI\\x", L"4294967295", L"0"}));
+}
+
+// ---- the latency test: statistics, what the helper accepts, and its progress file -----------
+
+void WriteAll(const std::wstring& path, const std::vector<char>& bytes);  // defined below
+
+void TestLatencyStats() {
+    using mtm::SummarizeWake;
+    CHECK(SummarizeWake({}).samples == 0);
+
+    std::vector<double> v;
+    for (int i = 100; i >= 1; --i) v.push_back(i);  // unsorted on purpose: 100 down to 1
+    const mtm::WakeStats s = SummarizeWake(v);
+    CHECK(s.samples == 100);
+    CHECK(s.avgUs == 50.5);
+    CHECK(s.medianUs == 50);  // nearest rank
+    CHECK(s.p99Us == 99);
+    CHECK(s.p999Us == 100);
+    CHECK(s.maxUs == 100);
+    CHECK(s.lateFraction == 0);
+
+    const mtm::WakeStats late = SummarizeWake({10, 20, 5000, 30});  // one of four is over 1 ms
+    CHECK(late.lateFraction == 0.25);
+    CHECK(late.maxUs == 5000);
+    CHECK(SummarizeWake({42}).p99Us == 42);  // a single sample is its own percentile
+}
+
+void TestWakeProbe() {
+    // On a PC that isn't badly overloaded, 300 ms of 1 ms sleeps gives a few hundred samples and a typical
+    // lateness far below the sleep itself. Loose limits: this checks the probe works, not how fast the PC is.
+    std::vector<double> us;
+    CHECK(mtm::MeasureWakeLatency(300, std::stop_token{}, us));
+    CHECK(us.size() >= 50 && us.size() <= 400);
+    CHECK(mtm::SummarizeWake(us).medianUs < 5000);
+
+    // A stop request ends it at once.
+    std::stop_source stop;
+    stop.request_stop();
+    std::vector<double> none;
+    const ULONGLONG t0 = GetTickCount64();
+    CHECK(mtm::MeasureWakeLatency(5000, stop.get_token(), none));
+    CHECK(GetTickCount64() - t0 < 500 && none.empty());
+}
+
+void TestLatencyHelperArgs() {
+    using mtm::ParseSweepArgs;
+    std::wstring file;
+    mtm::SweepPlan plan;
+    const std::wstring f = L"C:\\x\\mtm-latency-1-2.mtmlat";
+
+    CHECK(ParseSweepArgs({f, L"6000", L"2", L"40", L"2", L"24"}, file, plan));
+    CHECK(file == f && plan.phaseMs == 6000 && plan.rounds == 2);
+    CHECK(plan.values == (std::vector<DWORD>{40, 2, 24}));
+
+    CHECK(!ParseSweepArgs({f, L"6000", L"2"}, file, plan));                       // no values
+    CHECK(!ParseSweepArgs({f, L"1999", L"2", L"40"}, file, plan));                // phase too short
+    CHECK(!ParseSweepArgs({f, L"30001", L"2", L"40"}, file, plan));               // phase too long
+    CHECK(!ParseSweepArgs({f, L"6000", L"0", L"40"}, file, plan));                // no rounds
+    CHECK(!ParseSweepArgs({f, L"6000", L"5", L"40"}, file, plan));                // too many rounds
+    CHECK(!ParseSweepArgs({f, L"6000", L"2", L"64"}, file, plan));                // above what --tweak writes
+    CHECK(!ParseSweepArgs({f, L"6000", L"2", L"40", L"40"}, file, plan));         // repeated
+    CHECK(!ParseSweepArgs({f, L"6000", L"2", L"4x"}, file, plan));                // not a number
+    CHECK(!ParseSweepArgs({f, L"6000", L"2", L"-1"}, file, plan));
+    CHECK(!ParseSweepArgs({f, L"60000000", L"2", L"40"}, file, plan));
+    std::vector<std::wstring> many = {f, L"6000", L"2"};
+    for (int i = 0; i < 17; ++i) many.push_back(std::to_wstring(i));               // 17 values
+    CHECK(!ParseSweepArgs(many, file, plan));
+
+    // What the app asks for itself must always pass its own helper's checks.
+    std::vector<std::wstring> own = {f, L"6000", L"2"};
+    for (DWORD v : mtm::LatencyTestValues()) own.push_back(std::to_wstring(v));
+    CHECK(ParseSweepArgs(own, file, plan));
+    const std::vector<DWORD> tested = mtm::LatencyTestValues();
+    CHECK(tested.size() == 9);
+    auto has = [&](DWORD v) { return std::find(tested.begin(), tested.end(), v) != tested.end(); };
+    CHECK(has(0x28) && has(0x18) && has(0x02) && has(0x26) && has(0x14));
+    CHECK(!has(0x2A) && !has(0x29) && !has(0x1A) && !has(0x19));  // fixed slices ignore the boost
+}
+
+void TestProgressFile() {
+    wchar_t tmp[MAX_PATH] = {};
+    GetTempPathW(MAX_PATH, tmp);
+    const std::wstring dir = tmp;
+    const std::wstring good = dir + L"mtm-latency-test-1.mtmlat";
+    auto open = [&](const std::wstring& path, const wchar_t* prefix = L"mtm-latency-", const wchar_t* ext = L".mtmlat") {
+        HANDLE h = mtm::OpenProgressFile(path, prefix, ext);
+        const bool ok = h != INVALID_HANDLE_VALUE;
+        if (ok) CloseHandle(h);
+        return ok;
+    };
+    WriteAll(good, {});
+    CHECK(open(good));
+    CHECK(!open(dir + L"mtm-latency-missing.mtmlat"));                       // never created by the helper
+    CHECK(!open(dir + L"other-1-1.mtmlat"));                                 // wrong prefix
+    CHECK(!open(dir + L"mtm-latency-1-1.txt"));                              // wrong extension
+    CHECK(!open(good, L"mtm-optimize-", L".mtmopt"));                        // another helper's file name
+    const std::wstring folder = dir + L"mtm-latency-folder.mtmlat";
+    CreateDirectoryW(folder.c_str(), nullptr);
+    CHECK(!open(folder));                                                    // a directory
+    RemoveDirectoryW(folder.c_str());
+    DeleteFileW(good.c_str());
 }
 
 // ---- registry DWORDs and the parked restore-point frequency -------------------------------
@@ -253,6 +356,10 @@ void TestTraceFiles() {
 
 int main() {
     TestTweakEntries();
+    TestLatencyStats();
+    TestWakeProbe();
+    TestLatencyHelperArgs();
+    TestProgressFile();
     TestRegistryDwords();
     TestTraceFiles();
     std::printf(g_failures ? "%d check(s) failed\n" : "all checks passed\n", g_failures);

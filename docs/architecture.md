@@ -267,7 +267,7 @@ These files implement the same pattern:
 1. The UI thread calls a "try it directly" function.
 2. If it fails with `ERROR_ACCESS_DENIED` and the process isn't elevated, the
    function re-launches `Kernova.exe` elevated with a specific command-line flag
-   (`--power`, `--optimize`, `--set-dns`, `--tweak`), waits for it, and returns
+   (`--power`, `--optimize`, `--set-dns`, `--tweak`, `--latency-sweep`), waits for it, and returns
    its exit code. The launching code is `RunElevated` / `RunSelfElevated` in
    `power.cpp`; every helper uses it. A helper still running after its timeout
    is reported as `WAIT_TIMEOUT`, not as its (still pending) exit code.
@@ -310,6 +310,47 @@ If you add a new helper, follow the same pattern: strict argument validation, no
 paths from untrusted sources, no shell metacharacters, and the operation should
 be something you'd be comfortable granting to any process that can already
 elevate.
+
+### `latency.cpp` — the latency test (Latency test page)
+
+Compares the `Win32PrioritySeparation` values the way a DPC latency checker
+reports latency: a probe thread sleeps on a high-resolution 1 ms waitable timer
+and records how late each wake-up is (`MeasureWake`), then the results are
+summarised as typical / 99th percentile / worst, in microseconds.
+
+Three things make the comparison meaningful, and each can silently break it:
+
+- **The load.** On an idle PC every value gives the same answer, so
+  `--latency-load` runs in a separate process and keeps every core busy at normal
+  priority. It must be a separate process: the foreground boost is about the
+  front window's process versus everything else.
+- **The probe is in the front window's process.** The probe runs on the app's own
+  worker thread, not in the elevated helper (a hidden elevated process is never
+  the front window). `MeasureWake` samples `GetForegroundWindow()` every 100 ms
+  and a step where Kernova was in front less than 90% of the time is marked
+  "not reliable".
+- **The order.** Each value is measured twice, the second round in reverse
+  order, and the first second of every step is thrown away, so drift and the
+  switch itself don't favour a value.
+
+Who does what: `RunLatencySweep` (page worker thread) creates the progress file
+and starts the elevated `--latency-sweep` helper with one UAC prompt. The helper
+only writes the registry value and appends a line to the progress file at every
+step (`S`, `P <n> <value>`, `D` or `E <code>`); the app tails that file, starts
+the load on `S`, and measures after each `P`. There is no other channel, and the
+helper's arguments are validated by `ParseSweepArgs`. Cancel creates
+`<progress file>.stop`, which the helper checks every 100 ms.
+
+The original value is parked (`ParkDword`, value `KernovaSavedPrioritySeparation`)
+before the first step and restored by a destructor in the helper, so every normal
+exit restores it. A killed helper is repaired by `RepairQuantum` at the start of
+the next `--tweak` run; `RunTweaks` does it before reading the "original" value,
+so a test value can never be recorded as the original. The Latency test page also
+checks for a parked value when it is opened.
+
+Not verified: whether Windows applies a changed `Win32PrioritySeparation` to
+running programs at once, or only later. Sources disagree. The page therefore
+says plainly when no value stands out, instead of declaring a winner.
 
 ## UI layer
 

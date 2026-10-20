@@ -27,6 +27,7 @@ add_library(kernova_core OBJECT
   src/optimize_panel.cpp
   src/power.cpp
   src/tweaks.cpp
+  src/latency.cpp
   src/recorder.cpp
   src/health.cpp
   src/page_summary.cpp
@@ -38,6 +39,7 @@ add_library(kernova_core OBJECT
   src/page_connections.cpp
   src/page_power.cpp
   src/page_tweaks.cpp
+  src/page_latency.cpp
   src/page_startup.cpp
   src/page_services.cpp
   src/page_apps.cpp
