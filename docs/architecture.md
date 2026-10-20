@@ -215,6 +215,11 @@ It exists because WMI calls can block; the worker stores its result under a
 mutex and `CpuTempNow()` returns a copy. The `std::jthread` is the last member,
 per the convention above. Readings outside 1–125 °C are discarded.
 
+The app joins this thread when it exits, so no wait on it may be long. A WMI
+row gets `kWmiRowTimeoutMs` (500 ms); on a timeout the monitor is slow, not
+gone, so the connection is kept and that round shows the ACPI value. The limit
+does not cover `ConnectServer` or `ExecQuery` themselves.
+
 ### `net.cpp` — speed test, adapters, DNS
 
 Speed test uses WinHTTP against `speed.cloudflare.com`, the same endpoints
@@ -287,6 +292,19 @@ is therefore strict:
 - `--tweak [restore]` accepts entries of three fixed shapes (`quantum`, `usb`,
   or a PCI display adapter id), each range-checked by `ValidEntry` before
   anything is written. `ValidTweakEntry` exposes it for the tests.
+
+Two rules in `tweaks.cpp` protect the user's original values:
+
+- Registry DWORDs are `std::optional<DWORD>` end to end (`ReadDword`,
+  `WriteDword`); `nullopt` is the only "not set". Never squeeze one into an
+  `int` with -1 as a sentinel: values from `0x80000000` up would read as "not
+  set", and Undo would delete the real value. `CurrentEntry` also refuses to
+  back up a value that `ValidEntry` would not let the helper write back, and
+  `RunTweaks` then leaves that setting alone and returns `kTweakLeftUnchanged`.
+- Anything changed temporarily is parked first (`ParkDword`) and restored with
+  `UnparkDword`. The restore-point frequency is lifted this way. `WriteAll`
+  calls `UnparkDword` before doing anything, so a helper that was killed
+  mid-way is repaired by the next run.
 
 If you add a new helper, follow the same pattern: strict argument validation, no
 paths from untrusted sources, no shell metacharacters, and the operation should

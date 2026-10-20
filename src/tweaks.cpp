@@ -11,8 +11,68 @@
 #include <srrestoreptapi.h>
 
 #include <algorithm>
+#include <climits>
 
 namespace mtm {
+
+// ---- registry DWORDs (public so the tests can reach them) ------------------------------
+
+// nullopt = not there (or not a DWORD). A DWORD stays a DWORD: squeezing it into an int made values
+// from 0x80000000 up look "not set", and Undo would then have deleted the user's real value.
+std::optional<DWORD> ReadDword(HKEY root, const wchar_t* sub, const wchar_t* name) {
+    DWORD v = 0, size = sizeof v;
+    if (RegGetValueW(root, sub, name, RRF_RT_REG_DWORD, nullptr, &v, &size) != ERROR_SUCCESS) return std::nullopt;
+    return v;
+}
+
+// nullopt removes the value (back to "not set").
+DWORD WriteDword(HKEY root, const wchar_t* sub, const wchar_t* name, std::optional<DWORD> v) {
+    if (!v) {
+        const LSTATUS r = RegDeleteKeyValueW(root, sub, name);
+        return r == ERROR_FILE_NOT_FOUND ? ERROR_SUCCESS : DWORD(r);
+    }
+    const DWORD d = *v;
+    return DWORD(RegSetKeyValueW(root, sub, name, REG_DWORD, &d, sizeof d));
+}
+
+namespace {
+std::wstring NumOpt(std::optional<DWORD> v) { return v ? std::to_wstring(*v) : L"-"; }
+}  // namespace
+
+// While a setting is changed temporarily, its original is parked as text ("-" = not set) in a
+// sibling value. If the process dies before the setting is put back, UnparkDword (run at the
+// start of the next elevated helper) repairs it. Refuses to park over an earlier parked value:
+// that one is the real original.
+DWORD ParkDword(HKEY root, const wchar_t* sub, const wchar_t* name, const wchar_t* parkedName) {
+    DWORD size = 0;
+    if (RegGetValueW(root, sub, parkedName, RRF_RT_ANY, nullptr, nullptr, &size) == ERROR_SUCCESS) return ERROR_ALREADY_EXISTS;
+    const std::wstring text = NumOpt(ReadDword(root, sub, name));
+    return DWORD(RegSetKeyValueW(root, sub, parkedName, REG_SZ, text.c_str(), DWORD((text.size() + 1) * sizeof(wchar_t))));
+}
+
+// Puts the parked original back and removes the parked value. Nothing parked is not an error.
+// A parked value that isn't ours (garbled) is removed and reported as ERROR_INVALID_DATA, with the
+// setting left as it is. If the setting can't be written the parked value stays, to retry later.
+DWORD UnparkDword(HKEY root, const wchar_t* sub, const wchar_t* name, const wchar_t* parkedName) {
+    wchar_t text[16] = {};
+    DWORD size = sizeof text;
+    const LSTATUS got = RegGetValueW(root, sub, parkedName, RRF_RT_REG_SZ, nullptr, text, &size);
+    if (got == ERROR_FILE_NOT_FOUND || got == ERROR_PATH_NOT_FOUND) return ERROR_SUCCESS;
+    std::optional<DWORD> original;
+    bool valid = got == ERROR_SUCCESS;
+    if (valid && wcscmp(text, L"-") != 0) {
+        const size_t len = wcslen(text);
+        valid = len >= 1 && len <= 10 && std::all_of(text, text + len, [](wchar_t c) { return c >= L'0' && c <= L'9'; });
+        const unsigned long long v = valid ? wcstoull(text, nullptr, 10) : 0;
+        valid = valid && v <= 0xFFFFFFFFull;
+        if (valid) original = static_cast<DWORD>(v);
+    }
+    if (valid)
+        if (const DWORD r = WriteDword(root, sub, name, original); r != ERROR_SUCCESS) return r;
+    RegDeleteKeyValueW(root, sub, parkedName);
+    return valid ? ERROR_SUCCESS : ERROR_INVALID_DATA;
+}
+
 namespace {
 
 constexpr GUID kDisplayClass = {0x4d36e968, 0xe325, 0x11ce, {0xbf, 0xc1, 0x08, 0x00, 0x2b, 0xe1, 0x03, 0x18}};
@@ -26,20 +86,9 @@ constexpr wchar_t kQuantumValue[] = L"Win32PrioritySeparation";
 
 // ---- small helpers ------------------------------------------------------------------
 
-int ReadDword(HKEY root, const wchar_t* sub, const wchar_t* name) {
-    DWORD v = 0, size = sizeof v;
-    return RegGetValueW(root, sub, name, RRF_RT_REG_DWORD, nullptr, &v, &size) == ERROR_SUCCESS ? int(v) : -1;
-}
-
-// v < 0 removes the value (back to "not set").
-DWORD WriteDword(HKEY root, const wchar_t* sub, const wchar_t* name, int v) {
-    if (v < 0) {
-        const LSTATUS r = RegDeleteKeyValueW(root, sub, name);
-        return r == ERROR_FILE_NOT_FOUND ? ERROR_SUCCESS : DWORD(r);
-    }
-    const DWORD d = DWORD(v);
-    return DWORD(RegSetKeyValueW(root, sub, name, REG_DWORD, &d, sizeof d));
-}
+// The UI and the requests use an int with -1 for "not set".
+std::optional<DWORD> Opt(int v) { return v < 0 ? std::nullopt : std::optional<DWORD>(DWORD(v)); }
+int AsInt(std::optional<DWORD> v) { return v && *v <= INT_MAX ? int(*v) : -1; }
 
 std::wstring Num(int v) { return v < 0 ? L"-" : std::to_wstring(v); }
 int ParseNum(const wchar_t* s) { return wcscmp(s, L"-") == 0 ? -1 : int(wcstoul(s, nullptr, 10)); }
@@ -158,8 +207,8 @@ void ForEachGpu(REGSAM access, const std::function<bool(const GpuInterrupts&, HK
 GpuInterrupts ReadGpu(const GpuInterrupts& base, HKEY key, DEVINST dev) {
     GpuInterrupts g = base;
     if (key) {
-        g.msiSetting = ReadDword(key, kMsiKey, L"MSISupported");
-        g.priority = ReadDword(key, kAffinityKey, L"DevicePriority");
+        g.msiSetting = AsInt(ReadDword(key, kMsiKey, L"MSISupported"));
+        g.priority = AsInt(ReadDword(key, kAffinityKey, L"DevicePriority"));
     }
     g.msiInUse = MsiInUse(dev);
     return g;
@@ -172,8 +221,8 @@ DWORD WriteGpu(const std::wstring& instanceId, int msi, int priority) {
     ForEachGpu(KEY_READ | KEY_WRITE, [&](const GpuInterrupts& g, HKEY key, DEVINST) {
         if (_wcsicmp(g.instanceId.c_str(), instanceId.c_str()) != 0) return true;
         if (!key) r = ERROR_ACCESS_DENIED;
-        else if ((r = WriteDword(key, kMsiKey, L"MSISupported", msi)) == ERROR_SUCCESS)
-            r = WriteDword(key, kAffinityKey, L"DevicePriority", priority);
+        else if ((r = WriteDword(key, kMsiKey, L"MSISupported", Opt(msi))) == ERROR_SUCCESS)
+            r = WriteDword(key, kAffinityKey, L"DevicePriority", Opt(priority));
         return false;
     });
     return r;
@@ -181,7 +230,7 @@ DWORD WriteGpu(const std::wstring& instanceId, int msi, int priority) {
 
 // ---- quantum / USB ------------------------------------------------------------------
 
-DWORD WriteQuantum(int value) { return WriteDword(HKEY_LOCAL_MACHINE, kPriorityControl, kQuantumValue, value); }
+DWORD WriteQuantum(int value) { return WriteDword(HKEY_LOCAL_MACHINE, kPriorityControl, kQuantumValue, Opt(value)); }
 
 DWORD WriteUsb(const GUID& scheme, DWORD ac, DWORD dc) {
     DWORD r = PowerWriteACValueIndex(nullptr, &scheme, &kSubUsb, &kUsbSuspend, ac);
@@ -206,26 +255,39 @@ bool SameEntry(const Entry& a, const Entry& b) {
     return std::equal(a.begin() + 1, a.end(), b.begin() + 1, [](const auto& x, const auto& y) { return _wcsicmp(x.c_str(), y.c_str()) == 0; });
 }
 
-// What is set right now, in the shape of `like` (for USB: in the plan `like` names). Empty = not found.
-Entry CurrentEntry(const Entry& like) {
-    if (IsQuantum(like)) return {like[0], Num(ReadDword(HKEY_LOCAL_MACHINE, kPriorityControl, kQuantumValue))};
-    if (IsUsb(like)) {
+bool ValidEntry(const Entry& e);
+
+// What is set right now, in the shape of `like` (for USB: in the plan `like` names), with the full
+// DWORD values. Empty = not found. A value outside what ValidEntry accepts can't be restored by the
+// helper later, so it is reported as `unusual` (and returned empty) instead of being backed up wrongly.
+Entry CurrentEntry(const Entry& like, bool* unusual = nullptr) {
+    Entry raw;
+    if (IsQuantum(like)) {
+        raw = {like[0], NumOpt(ReadDword(HKEY_LOCAL_MACHINE, kPriorityControl, kQuantumValue))};
+    } else if (IsUsb(like)) {
         GUID g{};
         DWORD ac = 0, dc = 0;
         if (like.size() != 4 || FAILED(IIDFromString(like[1].c_str(), &g)) ||
             PowerReadACValueIndex(nullptr, &g, &kSubUsb, &kUsbSuspend, &ac) != ERROR_SUCCESS ||
             PowerReadDCValueIndex(nullptr, &g, &kSubUsb, &kUsbSuspend, &dc) != ERROR_SUCCESS)
             return {};
-        return {like[0], like[1], Num(int(ac)), Num(int(dc))};
+        raw = {like[0], like[1], std::to_wstring(ac), std::to_wstring(dc)};
+    } else {
+        ForEachGpu(KEY_READ, [&](const GpuInterrupts& g, HKEY key, DEVINST) {
+            if (_wcsicmp(g.instanceId.c_str(), like[0].c_str()) != 0) return true;
+            raw = {g.instanceId, L"-", L"-"};
+            if (key) {
+                raw[1] = NumOpt(ReadDword(key, kMsiKey, L"MSISupported"));
+                raw[2] = NumOpt(ReadDword(key, kAffinityKey, L"DevicePriority"));
+            }
+            return false;
+        });
     }
-    Entry out;
-    ForEachGpu(KEY_READ, [&](const GpuInterrupts& g, HKEY key, DEVINST dev) {
-        if (_wcsicmp(g.instanceId.c_str(), like[0].c_str()) != 0) return true;
-        const GpuInterrupts now = ReadGpu(g, key, dev);
-        out = {g.instanceId, Num(now.msiSetting), Num(now.priority)};
-        return false;
-    });
-    return out;
+    if (!raw.empty() && !ValidEntry(raw)) {
+        if (unusual) *unusual = true;
+        return {};
+    }
+    return raw;
 }
 
 // Range checks for anything the elevated helper is asked to write.
@@ -252,18 +314,28 @@ DWORD WriteEntry(const Entry& e) {
     return WriteGpu(e[0], ParseNum(e[1].c_str()), ParseNum(e[2].c_str()));
 }
 
+constexpr wchar_t kSystemRestoreKey[] = L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\SystemRestore";
+constexpr wchar_t kRestoreFrequency[] = L"SystemRestorePointCreationFrequency";
+constexpr wchar_t kParkedFrequency[] = L"KernovaSavedFrequency";
+
+// Puts the restore-point frequency back if an earlier run was killed while it was lifted.
+void RepairRestoreFrequency() {
+    UnparkDword(HKEY_LOCAL_MACHINE, kSystemRestoreKey, kRestoreFrequency, kParkedFrequency);
+}
+
 // Elevated. Windows quietly skips a new restore point when one was made in the last 24 hours,
-// so that limit is lifted for this one call and put back straight after.
+// so that limit is lifted for this one call and put back straight after. The original is parked
+// first, so if this process is killed in between, the next helper run repairs it.
 DWORD MakeRestorePoint() {
     if (!IsElevated()) return ERROR_ACCESS_DENIED;
     CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     // System Restore needs the caller to allow impersonation; fails harmlessly if COM security is already set.
     CoInitializeSecurity(nullptr, -1, nullptr, nullptr, RPC_C_AUTHN_LEVEL_PKT_PRIVACY, RPC_C_IMP_LEVEL_IMPERSONATE, nullptr,
                          EOAC_NONE, nullptr);
-    constexpr wchar_t key[] = L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\SystemRestore";
-    constexpr wchar_t freq[] = L"SystemRestorePointCreationFrequency";
-    const int oldFreq = ReadDword(HKEY_LOCAL_MACHINE, key, freq);
-    WriteDword(HKEY_LOCAL_MACHINE, key, freq, 0);
+    if (const DWORD parked = ParkDword(HKEY_LOCAL_MACHINE, kSystemRestoreKey, kRestoreFrequency, kParkedFrequency);
+        parked != ERROR_SUCCESS)
+        return parked;  // nothing is changed: without a way back the limit isn't lifted
+    WriteDword(HKEY_LOCAL_MACHINE, kSystemRestoreKey, kRestoreFrequency, DWORD(0));
     RESTOREPOINTINFOW info{};
     info.dwEventType = BEGIN_SYSTEM_CHANGE;
     info.dwRestorePtType = MODIFY_SETTINGS;
@@ -276,7 +348,7 @@ DWORD MakeRestorePoint() {
         info.llSequenceNumber = st.llSequenceNumber;
         SRSetRestorePointW(&info, &st);
     }
-    WriteDword(HKEY_LOCAL_MACHINE, key, freq, oldFreq);  // -1 removes it again (back to Windows' default)
+    RepairRestoreFrequency();  // back to what it was (removed again if it wasn't set)
     return r;
 }
 
@@ -285,6 +357,7 @@ constexpr DWORD kPointFailedBit = 0x20000000;
 
 // Elevated. A failed restore point stops everything: no tweak is applied without its safety net.
 DWORD WriteAll(bool restorePoint, const std::vector<Entry>& entries) {
+    RepairRestoreFrequency();  // an earlier run may have been killed while the limit was lifted
     if (restorePoint)
         if (const DWORD r = MakeRestorePoint(); r != ERROR_SUCCESS) return r | kPointFailedBit;
     DWORD first = ERROR_SUCCESS;
@@ -311,9 +384,9 @@ std::vector<GpuInterrupts> ListGpuInterrupts() {
 
 QuantumState ReadQuantum() {
     QuantumState s;
-    const int v = ReadDword(HKEY_LOCAL_MACHINE, kPriorityControl, kQuantumValue);
-    s.exists = v >= 0;
-    if (s.exists) s.value = DWORD(v);
+    const std::optional<DWORD> v = ReadDword(HKEY_LOCAL_MACHINE, kPriorityControl, kQuantumValue);
+    s.exists = v.has_value();
+    if (v) s.value = *v;
     return s;
 }
 
@@ -350,7 +423,7 @@ UsbSuspendState ReadUsbSuspend() {
 // RPSessionInterval is 0 when System Restore is off for every drive; missing = unknown, assume on
 // (the restore point attempt itself still reports a real failure).
 bool SystemProtectionOn() {
-    return ReadDword(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\SystemRestore", L"RPSessionInterval") != 0;
+    return ReadDword(HKEY_LOCAL_MACHINE, kSystemRestoreKey, L"RPSessionInterval").value_or(1) != 0;
 }
 
 bool HasTweakBackup(const std::wstring& key) { return FindEntry(LoadBackup(), key) != nullptr; }
@@ -363,6 +436,7 @@ DWORD RunTweaks(const std::vector<TweakRequest>& requests, bool restorePointFirs
         bool undo = false, added = false;
     };
     std::vector<Op> ops;
+    int leftUnchanged = 0;  // settings skipped because their current value can't be restored later
     std::vector<Entry> backup = LoadBackup();
     GUID scheme{};
     const bool haveScheme = ActiveScheme(scheme);
@@ -380,7 +454,12 @@ DWORD RunTweaks(const std::vector<TweakRequest>& requests, bool restorePointFirs
             else if (haveScheme) op.target = {key, GuidText(scheme), Num(q.v1), Num(q.v2)};
             else continue;
             if (!ValidEntry(op.target)) return ERROR_INVALID_PARAMETER;
-            op.original = CurrentEntry(op.target);
+            bool unusual = false;
+            op.original = CurrentEntry(op.target, &unusual);
+            if (unusual) {  // would be backed up wrongly, so it is left exactly as it is
+                ++leftUnchanged;
+                continue;
+            }
             if (op.original.empty()) continue;
             // Only the first original is kept, so Undo always means "as it was before Kernova".
             if (!FindEntry(backup, key)) {
@@ -390,7 +469,7 @@ DWORD RunTweaks(const std::vector<TweakRequest>& requests, bool restorePointFirs
         }
         ops.push_back(std::move(op));
     }
-    if (ops.empty() && !restorePointFirst) return ERROR_SUCCESS;
+    if (ops.empty() && !restorePointFirst) return leftUnchanged ? kTweakLeftUnchanged : ERROR_SUCCESS;
     // Written before anything changes: without the safety net nothing is applied.
     if (!SaveBackup(backup)) return ERROR_WRITE_FAULT;
 
@@ -415,7 +494,7 @@ DWORD RunTweaks(const std::vector<TweakRequest>& requests, bool restorePointFirs
             std::erase_if(backup, [&](const Entry& e) { return _wcsicmp(e[0].c_str(), op.target[0].c_str()) == 0; });
     }
     SaveBackup(backup);
-    return r;
+    return r == ERROR_SUCCESS && leftUnchanged ? kTweakLeftUnchanged : r;
 }
 
 bool HandleTweakCommandLine(int& exitCode) {

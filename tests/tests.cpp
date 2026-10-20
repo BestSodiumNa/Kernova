@@ -50,6 +50,89 @@ void TestTweakEntries() {
     CHECK(!ValidTweakEntry({L"PCI\\x", L"2", L"3"}));
     CHECK(!ValidTweakEntry({L"PCI\\x", L"1", L"4"}));
     CHECK(!ValidTweakEntry({L"PCI\\x", L"1"}));
+
+    // Values that don't fit what the helper may write (these are what the backup refuses to record).
+    CHECK(!ValidTweakEntry({L"quantum", L"2147483648"}));
+    CHECK(!ValidTweakEntry({L"usb", L"{x}", L"4294967295", L"0"}));
+    CHECK(!ValidTweakEntry({L"PCI\\x", L"4294967295", L"0"}));
+}
+
+// ---- registry DWORDs and the parked restore-point frequency -------------------------------
+// Runs against a throwaway key under HKCU, so no admin rights are needed.
+
+void TestRegistryDwords() {
+    using mtm::ParkDword;
+    using mtm::ReadDword;
+    using mtm::UnparkDword;
+    using mtm::WriteDword;
+    HKEY root = HKEY_CURRENT_USER;
+    const wchar_t* sub = L"Software\\KernovaTests";
+    RegDeleteTreeW(root, sub);
+
+    // A DWORD keeps its whole range; "not set" is only ever nullopt.
+    CHECK(WriteDword(root, sub, L"v", 0x80000000u) == ERROR_SUCCESS);
+    CHECK(ReadDword(root, sub, L"v") == 0x80000000u);
+    CHECK(WriteDword(root, sub, L"v", 0xFFFFFFFFu) == ERROR_SUCCESS);
+    CHECK(ReadDword(root, sub, L"v") == 0xFFFFFFFFu);
+    CHECK(WriteDword(root, sub, L"v", 0u) == ERROR_SUCCESS);
+    CHECK(ReadDword(root, sub, L"v") == 0u);
+    CHECK(WriteDword(root, sub, L"v", std::nullopt) == ERROR_SUCCESS);
+    CHECK(!ReadDword(root, sub, L"v"));
+    CHECK(WriteDword(root, sub, L"v", std::nullopt) == ERROR_SUCCESS);  // removing what isn't there is fine
+    RegSetKeyValueW(root, sub, L"text", REG_SZ, L"5", 2 * sizeof(wchar_t));
+    CHECK(!ReadDword(root, sub, L"text"));  // not a DWORD
+
+    auto freq = [&] { return ReadDword(root, sub, L"freq"); };
+    auto parked = [&] {
+        DWORD size = 0;
+        return RegGetValueW(root, sub, L"parked", RRF_RT_ANY, nullptr, nullptr, &size) == ERROR_SUCCESS;
+    };
+    auto park = [&] { return ParkDword(root, sub, L"freq", L"parked"); };
+    auto unpark = [&] { return UnparkDword(root, sub, L"freq", L"parked"); };
+
+    // Lifted to 0 and put back.
+    WriteDword(root, sub, L"freq", 1440u);
+    CHECK(park() == ERROR_SUCCESS && parked());
+    WriteDword(root, sub, L"freq", 0u);
+    CHECK(unpark() == ERROR_SUCCESS);
+    CHECK(freq() == 1440u && !parked());
+
+    // Not set before: it is removed again, not left at 0.
+    WriteDword(root, sub, L"freq", std::nullopt);
+    CHECK(park() == ERROR_SUCCESS);
+    WriteDword(root, sub, L"freq", 0u);
+    CHECK(unpark() == ERROR_SUCCESS);
+    CHECK(!freq() && !parked());
+
+    // A value above INT_MAX survives the round trip.
+    WriteDword(root, sub, L"freq", 0xFFFFFFFFu);
+    CHECK(park() == ERROR_SUCCESS);
+    WriteDword(root, sub, L"freq", 0u);
+    CHECK(unpark() == ERROR_SUCCESS);
+    CHECK(freq() == 0xFFFFFFFFu);
+
+    // Nothing parked: nothing changes (this is what every normal helper run does first).
+    WriteDword(root, sub, L"freq", 7u);
+    CHECK(unpark() == ERROR_SUCCESS);
+    CHECK(freq() == 7u);
+
+    // A run that was killed leaves the original parked; parking again must not overwrite it with 0.
+    WriteDword(root, sub, L"freq", 5u);
+    CHECK(park() == ERROR_SUCCESS);
+    WriteDword(root, sub, L"freq", 0u);
+    CHECK(park() == ERROR_ALREADY_EXISTS);
+    CHECK(unpark() == ERROR_SUCCESS);
+    CHECK(freq() == 5u);
+
+    // A parked value that isn't ours is dropped and the setting is left alone.
+    for (const wchar_t* junk : {L"abc", L"", L"12345678901", L"4294967296", L"-5"}) {
+        WriteDword(root, sub, L"freq", 9u);
+        RegSetKeyValueW(root, sub, L"parked", REG_SZ, junk, DWORD((wcslen(junk) + 1) * sizeof(wchar_t)));
+        CHECK(unpark() == ERROR_INVALID_DATA);
+        CHECK(freq() == 9u && !parked());
+    }
+
+    RegDeleteTreeW(root, sub);
 }
 
 // ---- the .mtmtrace loader ---------------------------------------------------------------
@@ -160,6 +243,7 @@ void TestTraceFiles() {
 
 int main() {
     TestTweakEntries();
+    TestRegistryDwords();
     TestTraceFiles();
     std::printf(g_failures ? "%d check(s) failed\n" : "all checks passed\n", g_failures);
     return g_failures ? 1 : 0;

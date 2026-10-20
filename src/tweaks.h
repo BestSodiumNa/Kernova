@@ -2,6 +2,8 @@
 
 #include "common.h"
 
+#include <optional>
+
 namespace mtm {
 
 // Latency tweaks for gaming. Every change first saves the original value to a backup
@@ -45,6 +47,11 @@ struct TweakRequest {
     // default). Quantum: the Win32PrioritySeparation value. USB: plugged-in, battery (0 off, 1 on).
     int v1 = -1, v2 = -1;
 };
+// Returned by RunTweaks when everything else succeeded but at least one setting was skipped:
+// its current value is outside what the helper can write back (so Undo couldn't restore it),
+// and Kernova leaves such a value exactly as it is. Application-defined, never a Win32 code.
+constexpr DWORD kTweakLeftUnchanged = 0x40000001;
+
 // Applies / undoes all requests, optionally creating a System Restore point first, with
 // at most one UAC prompt. If the restore point fails nothing is changed, *pointFailed is set
 // and the error is returned (ERROR_SERVICE_DISABLED = System Protection is off).
@@ -63,5 +70,14 @@ bool HandleTweakCommandLine(int& exitCode);
 // Whether the elevated helper would accept this entry ("field|field|..." split into fields).
 // Exposed so the tests can pin down what the helper is willing to write.
 bool ValidTweakEntry(const std::vector<std::wstring>& entry);
+
+// Registry DWORD helpers, exposed for the tests. nullopt = not set / remove the value.
+std::optional<DWORD> ReadDword(HKEY root, const wchar_t* sub, const wchar_t* name);
+DWORD WriteDword(HKEY root, const wchar_t* sub, const wchar_t* name, std::optional<DWORD> value);
+// Keeps a setting's original in a sibling text value while the setting is changed temporarily,
+// and puts it back afterwards (UnparkDword is also how a run that was killed in between is
+// repaired). ParkDword refuses to overwrite an earlier parked value (ERROR_ALREADY_EXISTS).
+DWORD ParkDword(HKEY root, const wchar_t* sub, const wchar_t* name, const wchar_t* parkedName);
+DWORD UnparkDword(HKEY root, const wchar_t* sub, const wchar_t* name, const wchar_t* parkedName);
 
 }  // namespace mtm

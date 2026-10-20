@@ -327,6 +327,9 @@ private:
                                                   : restorePoint ? L"Restore point created and changes applied." : L"Done.") +
                                          (gpu ? L"  Restart the PC for the graphics card change to take effect." : L""));
                 else if (r == ERROR_CANCELLED) SetText(status_, L"Not changed — the administrator prompt was cancelled.");
+                else if (r == kTweakLeftUnchanged)
+                    SetText(status_, L"Left unchanged: a setting has an unusual current value that Kernova couldn't restore "
+                                     L"safely later, so it wasn't touched. Any other changes were applied.");
                 else if (pointFailed && r == ERROR_SERVICE_DISABLED)
                     SetText(status_, L"Nothing changed: System Protection is off for your system drive. Turn it on under "
                                      L"System Restore… → Configure, or switch off \"Restore point first\".");
