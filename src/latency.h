@@ -59,6 +59,45 @@ struct SweepOutcome {
 SweepOutcome RunLatencySweep(const std::vector<DWORD>& values, std::stop_token st,
                              const std::function<void(const std::wstring&)>& progress);
 
+// ------------------------------------------------------------------------------------ stall check
+//
+// The same idea as the stall probe in LatencyMon's driver, from user mode: one thread per logical CPU
+// reads the clock in a tight loop, and a gap between two reads means that CPU was taken away. Threads run
+// at time-critical priority, so what is left is interrupts, DPCs, firmware (SMI) and the hypervisor,
+// plus any real-time-priority work. A gap seen on most CPUs at the same moment froze the whole machine
+// (SMI, firmware, power management, hypervisor); a gap on one CPU is local (interrupt or DPC routines,
+// a driver). It can't name the driver: that needs an ETW trace (LatencyMon, WPR).
+
+constexpr double kStallBucketsUs[] = {50, 100, 250, 500, 1000};  // gaps are counted at or above each
+constexpr size_t kStallBucketCount = sizeof kStallBucketsUs / sizeof kStallBucketsUs[0];
+
+struct StallSpan {
+    int cpu = 0;
+    double startUs = 0, lenUs = 0;  // since the check began
+};
+struct CpuStalls {
+    int cpu = 0;                          // index in the order probed (processor group, then CPU)
+    unsigned group = 0, number = 0;       // as Windows numbers them
+    double worstUs = 0, lostPct = 0;      // lostPct: share of watched time spent in gaps
+    size_t over[kStallBucketCount] = {};  // gaps at or above kStallBucketsUs[i]
+};
+struct StallReport {
+    bool ok = false;                // the probes ran
+    bool cancelled = false;
+    double watchedSec = 0;
+    int cpuCount = 0;
+    std::vector<CpuStalls> cpus;
+    size_t wideEvents = 0, localEvents = 0;  // whole-machine stalls, and gaps seen on a single CPU
+    double wideWorstUs = 0, localWorstUs = 0;
+    size_t wideOver[kStallBucketCount] = {};  // whole-machine stalls at or above each bucket
+};
+// Splits gaps into whole-machine stalls (at least 3/4 of the CPUs, at least 2, were gone at the same
+// time) and local ones. `cpuCount` is how many CPUs were watched. The result's per-CPU rows are left empty.
+StallReport ClassifyStalls(std::vector<StallSpan> spans, int cpuCount);
+// Watches every logical CPU (up to 64) for `ms`. No elevation, no helper; the threads rest 10 ms in every
+// 100 so the PC stays usable. Call from a worker thread. `progress` gets the seconds left.
+StallReport MeasureStalls(DWORD ms, std::stop_token st, const std::function<void(DWORD secondsLeft)>& progress);
+
 // Handles "--latency-sweep ..." (the elevated helper) and "--latency-load ..." (the background load).
 bool HandleLatencyCommandLine(int& exitCode);
 

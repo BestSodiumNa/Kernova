@@ -8,6 +8,13 @@
   (typical, 99th percentile and worst, in microseconds). One admin prompt, about
   2 minutes; your original setting is put back afterwards, and if the test is
   killed the next game-tweaks run (or opening the page) repairs it.
+- The Latency test page also has a Stall check (20 s, no admin prompt), the user-mode
+  version of the stall probe in LatencyMon's driver: one top-priority thread per
+  CPU reads the clock in a tight loop and any gap of 50 µs or more is counted
+  (worst, ≥100 µs, ≥500 µs, ≥1 ms, share of time lost, per CPU). Gaps seen on at
+  least 3/4 of the CPUs at the same moment are reported as whole-PC stalls
+  (firmware/SMI, power management, hypervisor); the rest are single-CPU (an
+  interrupt or DPC routine). It can't name the driver.
 - The scheduling choice is no longer marked "(recommended)", and "Apply all
   recommended" leaves it alone: no measurement says which value is best.
 - The sidebar spaces its entries to fit a short window, now that there are 17.

@@ -111,6 +111,48 @@ void TestWakeProbe() {
     CHECK(GetTickCount64() - t0 < 500 && none.empty());
 }
 
+void TestStallClassifier() {
+    using mtm::StallSpan;
+    CHECK(mtm::ClassifyStalls({}, 4).wideEvents == 0);
+
+    // All four CPUs gone at the same moment: one whole-PC stall, as long as the longest gap.
+    mtm::StallReport all = mtm::ClassifyStalls({{0, 1000, 800}, {1, 1010, 790}, {2, 1005, 810}, {3, 1020, 700}}, 4);
+    CHECK(all.wideEvents == 1 && all.localEvents == 0);
+    CHECK(all.wideWorstUs == 810);
+    CHECK(all.wideOver[3] == 1 && all.wideOver[4] == 0);  // at least 500 µs, not 1 ms
+
+    // Gaps on single CPUs, or at different moments, are local.
+    mtm::StallReport local = mtm::ClassifyStalls({{0, 1000, 300}, {1, 5000, 400}, {2, 9000, 120}}, 4);
+    CHECK(local.wideEvents == 0 && local.localEvents == 3);
+    CHECK(local.localWorstUs == 400);
+
+    // Two of four is not enough (needs 3/4); three of four is. One CPU alone never counts as the whole PC.
+    CHECK(mtm::ClassifyStalls({{0, 100, 500}, {1, 100, 500}}, 4).wideEvents == 0);
+    CHECK(mtm::ClassifyStalls({{0, 100, 500}, {1, 100, 500}, {2, 100, 500}}, 4).wideEvents == 1);
+    CHECK(mtm::ClassifyStalls({{0, 100, 500}}, 1).wideEvents == 0);
+
+    // The same CPU twice doesn't make two CPUs; a span from an unknown CPU is ignored for matching.
+    CHECK(mtm::ClassifyStalls({{0, 100, 500}, {0, 150, 500}}, 2).wideEvents == 0);
+    CHECK(mtm::ClassifyStalls({{0, 100, 500}, {9, 100, 500}}, 2).wideEvents == 0);
+}
+
+void TestStallProbe() {
+    // Half a second on this PC's CPUs: the probes run, every CPU gets a row, and the numbers are sane.
+    // Loose limits: it checks the probe works, not how clean the PC is.
+    const mtm::StallReport r = mtm::MeasureStalls(500, std::stop_token{}, nullptr);
+    CHECK(r.ok && !r.cancelled && r.cpuCount >= 1);
+    CHECK(r.cpus.size() == size_t(r.cpuCount));
+    CHECK(r.watchedSec > 0.2 && r.watchedSec < 0.6);
+    for (const mtm::CpuStalls& c : r.cpus) CHECK(c.lostPct >= 0 && c.lostPct < 100 && c.worstUs >= 0);
+
+    // A stop request ends it at once.
+    std::stop_source stop;
+    stop.request_stop();
+    const ULONGLONG t0 = GetTickCount64();
+    const mtm::StallReport quick = mtm::MeasureStalls(5000, stop.get_token(), nullptr);
+    CHECK(GetTickCount64() - t0 < 1000 && quick.cancelled);
+}
+
 void TestLatencyHelperArgs() {
     using mtm::ParseSweepArgs;
     std::wstring file;
@@ -358,6 +400,8 @@ int main() {
     TestTweakEntries();
     TestLatencyStats();
     TestWakeProbe();
+    TestStallClassifier();
+    TestStallProbe();
     TestLatencyHelperArgs();
     TestProgressFile();
     TestRegistryDwords();

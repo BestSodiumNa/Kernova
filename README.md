@@ -18,7 +18,7 @@ there is no licensing or network activation code.
 | Services | Status, PID, start type; start/stop/restart | Service Control Manager |
 | Installed apps | Registry (4 views), MSI and Store apps; search, uninstall | Registry, `MsiEnumProductsExW`, WinRT `PackageManager` |
 | Disk space | Folder sizes, 1,000 largest files, size by file type; drill down | `FindFirstFileExW` (large fetch), long paths |
-| Latency test | Compares the thread-scheduling settings on this PC the way a DPC latency checker reports latency: how late timer wake-ups are with every core busy (typical, 99th percentile, worst); one admin prompt, about 2 minutes, restores your setting | High-resolution waitable timer, `Win32PrioritySeparation` |
+| Latency test | Compares the thread-scheduling settings on this PC the way a DPC latency checker reports latency: how late timer wake-ups are with every core busy (typical, 99th percentile, worst); one admin prompt, about 2 minutes, restores your setting. A separate 20 s **stall check** watches every CPU for gaps (interrupts, DPCs, SMI, hypervisor), tells whole-PC stalls from single-CPU ones, no admin needed | High-resolution waitable timer, `Win32PrioritySeparation`, QPC on every CPU |
 | Drive Health | SMART (SATA) and NVMe health, temperature, failure prediction; drive optimization with reminders | `IOCTL_ATA_PASS_THROUGH`, `IOCTL_STORAGE_QUERY_PROPERTY`, `defrag.exe` |
 | Flight Recorder | Records system and top-process samples to a `.mtmtrace` file, or saves the in-memory buffer (about an hour at 1 Hz) | PDH, `NtQuerySystemInformation`, memory-mapped file I/O |
 | Benchmarks | CPU (FP64, single + multi), GPU (D3D11 compute), Disk (sequential + 4K random) | `std::thread`, Direct3D 11, unbuffered file I/O |
@@ -62,7 +62,7 @@ ctest --test-dir build --output-on-failure
 - `src/apps.cpp`, `src/msix.cpp` — installed-app collectors
 - `src/benchmarks.*` — benchmark engines (run on a worker thread)
 - `src/sensors.*` — CPU / GPU / disk temperatures
-- `src/latency.*` — the scheduler latency test (probe, background load and its elevated helper)
+- `src/latency.*` — the scheduler latency test (wake-up probe, stall check, background load and its elevated helper)
 - `src/power.*`, `src/defrag.*`, `src/net.*`, `src/tweaks.*` — the actions that can need administrator rights (each has its own elevated `--xxx` helper)
 - `src/inputdev.*`, `src/razer.*` — input-device and Razer mouse access
 - `tests/` — checks for the parsers and validators

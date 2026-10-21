@@ -348,6 +348,22 @@ the next `--tweak` run; `RunTweaks` does it before reading the "original" value,
 so a test value can never be recorded as the original. The Latency test page also
 checks for a parked value when it is opened.
 
+**Stall check** (`MeasureStalls`, `ClassifyStalls`). The same idea as the stall probe
+in LatencyMon's `rspLLL64.sys` (found by decompiling it: it reads the performance
+counter back to back and keeps the largest gap), done from user mode with no
+helper. One thread per logical CPU (up to 64, processor-group aware) is pinned
+with `SetThreadGroupAffinity`, runs at `THREAD_PRIORITY_TIME_CRITICAL` and reads
+`QueryPerformanceCounter` in a loop for 90 ms, then rests 10 ms so the UI and
+the rest of the PC keep running; the rest is not counted as watched time. A gap
+of 50 µs or more is a stall: it is counted in the 50 / 100 / 250 / 500 / 1000 µs
+buckets and kept as (cpu, start, length). `ClassifyStalls` then groups gaps that
+overlap in time, one per CPU: a group covering at least 3/4 of the watched CPUs
+(and at least 2) is a whole-PC stall (SMI, firmware, power management,
+hypervisor, since all CPUs lose time together); anything else is local (an
+interrupt or DPC routine). Limits: it can't name a driver (that needs ETW),
+real-time-priority threads also show as gaps, and the grouping is greedy in
+start order.
+
 Not verified: whether Windows applies a changed `Win32PrioritySeparation` to
 running programs at once, or only later. Sources disagree. The page therefore
 says plainly when no value stands out, instead of declaring a winner.

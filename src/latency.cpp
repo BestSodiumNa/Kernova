@@ -336,6 +336,144 @@ SweepOutcome RunLatencySweep(const std::vector<DWORD>& values, std::stop_token s
     return out;
 }
 
+// -------------------------------------------------------------------------------- the stall check
+
+namespace {
+constexpr DWORD kBurstMs = 90, kRestMs = 10;  // each probe thread spins this long, then rests this long
+constexpr size_t kMaxSpansPerCpu = 50000;     // gaps are still counted past this, just not kept for matching
+constexpr int kMaxProbeCpus = 64;
+
+size_t BucketIndex(double us) {  // how many buckets this gap reaches (0 = below the first)
+    size_t n = 0;
+    while (n < kStallBucketCount && us >= kStallBucketsUs[n]) ++n;
+    return n;
+}
+}  // namespace
+
+StallReport ClassifyStalls(std::vector<StallSpan> spans, int cpuCount) {
+    StallReport r;
+    r.cpuCount = cpuCount;
+    // shortcut: greedy grouping in start order, fine for the gaps one run produces; a pathological pile of
+    // overlapping gaps could be split differently than an optimal matching would.
+    std::sort(spans.begin(), spans.end(), [](const StallSpan& a, const StallSpan& b) { return a.startUs < b.startUs; });
+    const int need = std::max(2, (cpuCount * 3 + 3) / 4);
+    std::vector<char> used(spans.size(), 0);
+    for (size_t i = 0; i < spans.size(); ++i) {
+        if (used[i]) continue;
+        used[i] = 1;
+        std::vector<size_t> group{i};
+        std::vector<char> seen(static_cast<size_t>(std::max(cpuCount, 0)), 0);
+        double hi = spans[i].startUs + spans[i].lenUs;
+        if (spans[i].cpu >= 0 && spans[i].cpu < cpuCount) seen[spans[i].cpu] = 1;
+        for (size_t j = i + 1; j < spans.size() && spans[j].startUs <= hi; ++j) {
+            const int c = spans[j].cpu;
+            if (used[j] || c < 0 || c >= cpuCount || seen[c]) continue;
+            seen[c] = 1;
+            group.push_back(j);
+            hi = std::min(hi, spans[j].startUs + spans[j].lenUs);  // they must all be gone at once
+        }
+        if (static_cast<int>(group.size()) >= need) {
+            double len = 0;
+            for (size_t g : group) {
+                used[g] = 1;
+                len = std::max(len, spans[g].lenUs);
+            }
+            ++r.wideEvents;
+            r.wideWorstUs = std::max(r.wideWorstUs, len);
+            for (size_t b = 0; b < BucketIndex(len); ++b) ++r.wideOver[b];
+        } else {
+            ++r.localEvents;
+            r.localWorstUs = std::max(r.localWorstUs, spans[i].lenUs);
+        }
+    }
+    return r;
+}
+
+StallReport MeasureStalls(DWORD ms, std::stop_token st, const std::function<void(DWORD)>& progress) {
+    struct Cpu {
+        WORD group;
+        DWORD number;
+        std::vector<StallSpan> spans;
+        double worstUs = 0, lostUs = 0, watchedUs = 0;
+        size_t over[kStallBucketCount] = {};
+    };
+    std::vector<Cpu> cpus;
+    for (WORD g = 0, groups = GetActiveProcessorGroupCount(); g < groups; ++g)
+        for (DWORD n = 0, count = GetActiveProcessorCount(g); n < count && cpus.size() < kMaxProbeCpus; ++n)
+            cpus.push_back({g, n});
+
+    StallReport r;
+    if (cpus.empty()) return r;
+    LARGE_INTEGER freq, t0;
+    QueryPerformanceFrequency(&freq);
+    QueryPerformanceCounter(&t0);
+    const double usPerTick = 1e6 / double(freq.QuadPart);
+    std::atomic<bool> halt{false};
+
+    std::vector<std::thread> threads;
+    for (size_t k = 0; k < cpus.size(); ++k)
+        threads.emplace_back([&, k] {
+            Cpu& c = cpus[k];
+            GROUP_AFFINITY ga{};
+            ga.Group = c.group;
+            ga.Mask = KAFFINITY(1) << c.number;
+            SetThreadGroupAffinity(GetCurrentThread(), &ga, nullptr);
+            SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
+            Sleep(1);  // let the affinity take effect before the first read
+            while (!halt.load(std::memory_order_relaxed)) {
+                LARGE_INTEGER prev, cur;
+                QueryPerformanceCounter(&prev);
+                const LONGLONG burstStart = prev.QuadPart, burstEnd = prev.QuadPart + freq.QuadPart * kBurstMs / 1000;
+                do {
+                    QueryPerformanceCounter(&cur);
+                    const double gap = double(cur.QuadPart - prev.QuadPart) * usPerTick;
+                    if (gap >= kStallBucketsUs[0]) {
+                        c.lostUs += gap;
+                        c.worstUs = std::max(c.worstUs, gap);
+                        for (size_t b = 0; b < BucketIndex(gap); ++b) ++c.over[b];
+                        if (c.spans.size() < kMaxSpansPerCpu)
+                            c.spans.push_back({int(k), double(prev.QuadPart - t0.QuadPart) * usPerTick, gap});
+                    }
+                    prev = cur;
+                } while (cur.QuadPart < burstEnd);
+                c.watchedUs += double(cur.QuadPart - burstStart) * usPerTick;  // the rest in between isn't watched
+                Sleep(kRestMs);
+            }
+        });
+
+    const ULONGLONG start = GetTickCount64();
+    DWORD shown = ~0u;
+    while (!st.stop_requested() && GetTickCount64() - start < ms) {
+        const DWORD left = static_cast<DWORD>((ms - (GetTickCount64() - start) + 999) / 1000);
+        if (left != shown && progress) progress(shown = left);
+        Sleep(100);
+    }
+    halt = true;
+    for (std::thread& t : threads) t.join();
+
+    std::vector<StallSpan> all;
+    double watched = 0;
+    for (size_t k = 0; k < cpus.size(); ++k) {
+        Cpu& c = cpus[k];
+        all.insert(all.end(), c.spans.begin(), c.spans.end());
+        CpuStalls row;
+        row.cpu = int(k);
+        row.group = c.group;
+        row.number = c.number;
+        row.worstUs = c.worstUs;
+        row.lostPct = c.watchedUs > 0 ? c.lostUs / c.watchedUs * 100 : 0;
+        std::copy(std::begin(c.over), std::end(c.over), row.over);
+        r.cpus.push_back(row);
+        watched = std::max(watched, c.watchedUs);
+    }
+    StallReport sorted = ClassifyStalls(std::move(all), int(cpus.size()));
+    sorted.cpus = std::move(r.cpus);
+    sorted.ok = true;
+    sorted.cancelled = st.stop_requested();
+    sorted.watchedSec = watched / 1e6;
+    return sorted;
+}
+
 bool HandleLatencyCommandLine(int& exitCode) {
     int argc = 0;
     LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);

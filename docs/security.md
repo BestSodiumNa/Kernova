@@ -76,6 +76,10 @@ The five elevated helpers are:
   15 minutes, so a crash cannot leave it running. It opens nothing and writes
   nothing.
 
+The Latency test page's Stall check starts nothing and needs no elevation: it
+runs threads inside the app for 20 s, pinned to each CPU at top priority, and
+reads only the performance counter. It opens, writes and installs nothing.
+
 Disk optimization settings (the Windows scheduled defrag task) are changed by
 running `schtasks.exe` elevated with a fixed argument list, not through
 `Kernova.exe`.
