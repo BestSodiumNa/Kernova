@@ -311,8 +311,26 @@ private:
         DrawCapsText(dc, L"Key travel", head, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
         SelectObject(dc, UiFont());
         SetTextColor(dc, g_pal.textFaint);
-        const std::wstring range = Format(L"0 – %.1f mm", travelMm);
-        DrawTextW(dc, range.c_str(), -1, &head, DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+        // Legend: what the two marks on a gauge mean.
+        RECT legend = head;
+        DrawTextW(dc, L"deepest", -1, &legend, DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+        SIZE sz{};
+        GetTextExtentPoint32W(dc, L"deepest", 7, &sz);
+        const int midY = (head.top + head.bottom) / 2;
+        int lx = legend.right - sz.cx - Scale(22);
+        {
+            Gdiplus::Graphics lg(dc);
+            Gdiplus::Pen peakPen(ToColor(g_pal.text, 140), 1.5f);
+            lg.DrawLine(&peakPen, float(lx), float(midY), float(lx + Scale(16)), float(midY));
+            lx -= Scale(14);
+            legend.right = lx;
+            DrawTextW(dc, L"actuated", -1, &legend, DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+            GetTextExtentPoint32W(dc, L"actuated", 8, &sz);
+            lx -= sz.cx + Scale(22);
+            Gdiplus::Pen actPen(ToColor(g_pal.warn), 2.0f);
+            actPen.SetDashStyle(Gdiplus::DashStyleDash);
+            lg.DrawLine(&actPen, float(lx), float(midY), float(lx + Scale(16)), float(midY));
+        }
         if (bars.empty()) {
             RECT body{in.left, head.bottom, in.right, in.bottom};
             DrawTextW(dc, empty.c_str(), -1, &body, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
@@ -695,18 +713,13 @@ private:
         for (const AnalogKeyboard::Key& k : now) {
             float& peak = peak_[k.code];
             peak = std::max(peak, k.depth);
-            if (k.actuated && !wasActuated_[k.code]) actuation_[k.code] = k.depth;  // just crossed the point
-            wasActuated_[k.code] = k.actuated;
             const auto key = codeKey_.find(k.code);
             if (key != codeKey_.end()) depthById_[key->second] = k.depth;
-            bars.push_back({key != codeKey_.end() ? ShortLabel(key->second) : L"Key", k.depth, peak,
-                            actuation_.count(k.code) ? actuation_[k.code] : -1.0f, k.actuated});
+            bars.push_back({key != codeKey_.end() ? ShortLabel(key->second) : L"Key", k.depth, peak, k.actuationAt, k.actuated});
         }
         // Released keys start their next press with a fresh peak.
         for (auto it = peak_.begin(); it != peak_.end();)
             it = std::any_of(now.begin(), now.end(), [&](const auto& k) { return k.code == it->first; }) ? std::next(it) : peak_.erase(it);
-        for (auto it = wasActuated_.begin(); it != wasActuated_.end();)
-            it = peak_.count(it->first) ? std::next(it) : wasActuated_.erase(it);
         if (!bars.empty() || !depthView_.bars.empty()) {
             depthView_.bars = std::move(bars);
             depthView_.Invalidate();
@@ -833,8 +846,7 @@ private:
     DepthView depthView_;
     AnalogKeyboard analog_;
     std::map<uint16_t, int> codeKey_;                 // learned: analog key code -> key id
-    std::map<uint16_t, float> peak_, actuation_;      // per analog code: deepest this press, actuation depth
-    std::map<uint16_t, bool> wasActuated_;
+    std::map<uint16_t, float> peak_;                  // per analog code: deepest point of this press
     std::map<int, float> depthById_;                  // current depth per key id, for the key map
     bool listening_ = false, dirtyKeys_ = false, visible_ = false;
     unsigned ticks_ = 0;

@@ -253,8 +253,18 @@ void AnalogKeyboard::Run(std::wstring path, std::stop_token stop) {
             const uint16_t code = uint16_t(buf[i] | (buf[i + 1] << 8));
             if (!code) break;
             const unsigned value = buf[i + 2] | (buf[i + 3] << 8);
-            if (value >> 6) now.push_back({code, float(value >> 6) / 1023.0f, (value & 1) != 0});
+            if (!(value >> 6)) continue;
+            const float depth = float(value >> 6) / 1023.0f;
+            const bool actuated = (value & 1) != 0;
+            // Caught here, at the keyboard's own 2-3 ms report rate: the first actuated report of a press.
+            auto [it, fresh] = actuationAt_.try_emplace(code, -1.0f);
+            if (actuated && it->second < 0) it->second = depth;
+            now.push_back({code, depth, actuated, it->second});
         }
+        // A key that's back at the top starts its next press with no actuation recorded.
+        std::erase_if(actuationAt_, [&](const auto& a) {
+            return std::none_of(now.begin(), now.end(), [&](const Key& k) { return k.code == a.first; });
+        });
         std::sort(now.begin(), now.end(), [](const Key& a, const Key& b) { return a.depth > b.depth; });
         std::lock_guard lock(mutex_);
         pressed_ = std::move(now);

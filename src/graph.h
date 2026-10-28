@@ -116,7 +116,13 @@ private:
     void PaintStatic(HDC dc, const RECT& rc) override;   // card, labels, empty tracks
     void PaintDynamic(HDC dc, const RECT& rc) override;  // eased bar fills
     bool Animating() const override;
-    std::vector<RECT> bars_;  // track rectangles, laid out in PaintStatic
+    void OnMouse(UINT msg, int x, int y) override;       // hover tooltip with the exact numbers
+    void ShowTip();
+    // Layout chosen in PaintStatic from the space available: bars with % and GHz under them,
+    // bars with % only, or (many threads / small window) a heatmap of tiles.
+    bool heat_ = false, showGhz_ = true;
+    int hover_ = -1;
+    std::vector<RECT> bars_;  // track rectangles (or heatmap tiles), laid out in PaintStatic
     std::vector<Core> cores_;
     std::vector<double> shown_;     // eased bar heights / usage read-outs
     std::vector<double> shownMhz_;  // eased clock read-outs

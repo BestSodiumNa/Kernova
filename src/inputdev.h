@@ -5,6 +5,7 @@
 #include <array>
 #include <atomic>
 #include <deque>
+#include <map>
 #include <mutex>
 #include <thread>
 
@@ -39,6 +40,7 @@ public:
         uint16_t code;      // the keyboard's own key code
         float depth;        // 0 = up, 1 = bottomed out
         bool actuated;      // past the switch's actuation point (as the keyboard reports it)
+        float actuationAt;  // depth of the report where this press actuated, -1 = not yet
     };
     ~AnalogKeyboard() { Stop(); }
     bool Start();  // false when no supported keyboard is connected
@@ -55,6 +57,7 @@ private:
     void Run(std::wstring path, std::stop_token stop);
     std::mutex mutex_;
     std::vector<Key> pressed_;
+    std::map<uint16_t, float> actuationAt_;  // reader thread only: per code, this press's actuation depth
     std::deque<double> times_;  // arrival times (ms) of the last second's reports
     HANDLE wake_ = nullptr;     // set to stop the reader
     std::jthread thread_;       // last: joined before the rest is destroyed

@@ -451,6 +451,33 @@ void CoreGrid::SetCores(std::vector<Core> cores, std::wstring subtitle) {
     if (cores.size() != cores_.size() || subtitle != subtitle_) InvalidateStatic();
     cores_ = std::move(cores);
     subtitle_ = std::move(subtitle);
+    if (hover_ >= 0) ShowTip();  // keep the hovered thread's numbers live
+    Invalidate();
+}
+
+void CoreGrid::ShowTip() {
+    if (hover_ < 0 || size_t(hover_) >= cores_.size() || size_t(hover_) >= bars_.size()) return;
+    RECT r = bars_[size_t(hover_)];
+    MapWindowPoints(hwnd_, nullptr, reinterpret_cast<POINT*>(&r), 2);
+    const Core& c = cores_[size_t(hover_)];
+    ShowRichTip(r, Format(L"CPU %d", hover_),
+                {{L"Usage", Format(L"%.0f%%", c.usage)}, {L"Clock", Format(L"%.2f GHz", c.mhz / 1000.0)}});
+}
+
+void CoreGrid::OnMouse(UINT msg, int x, int y) {
+    int hit = -1;
+    if (msg != WM_MOUSELEAVE) {
+        const POINT pt{x, y};
+        for (size_t i = 0; i < bars_.size(); ++i) {
+            RECT cell = bars_[i];
+            if (!heat_ && i < labels_.size()) cell.bottom = labels_[i].bottom;  // the read-out belongs to its bar
+            if (PtInRect(&cell, pt)) hit = int(i);
+        }
+    }
+    if (hit == hover_) return;
+    hover_ = hit;
+    if (hit < 0) HideRichTip();
+    else ShowTip();
     Invalidate();
 }
 
@@ -470,28 +497,79 @@ void CoreGrid::PaintStatic(HDC dc, const RECT& rc) {
     RECT title{in.left + Scale(14), in.top, in.right, in.top + titleH};
     HGDIOBJ old = SelectObject(dc, CapsFont());
     SetTextColor(dc, g_pal.textDim);
-    DrawCapsText(dc, L"Logical processors", title, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    static const wchar_t kTitle[] = L"Logical processors";
+    DrawCapsText(dc, kTitle, title, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    // The subtitle gets whatever the title leaves (caps text is letter-spaced, hence the extra),
+    // and is cut short with "…" rather than drawn over it.
+    SIZE capsSz{};
+    const std::wstring caps = ToUpper(kTitle);
+    GetTextExtentPoint32W(dc, caps.c_str(), int(caps.size()), &capsSz);
+    RECT sub = title;
+    sub.left += capsSz.cx + int(caps.size()) * Scale(2) + Scale(12);
     SelectObject(dc, UiFont());
-    DrawTextW(dc, subtitle_.c_str(), -1, &title, DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
-    SelectObject(dc, old);
+    if (sub.left < sub.right) DrawTextW(dc, subtitle_.c_str(), -1, &sub, DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
 
     bars_.clear();
     labels_.clear();
     const size_t n = cores_.size();
-    if (!n) return;
-    const int cols = static_cast<int>(n <= 8 ? n : (n <= 16 ? 8 : (n <= 32 ? 16 : 32)));
-    const int rows = static_cast<int>((n + cols - 1) / cols);
+    if (!n) {
+        SelectObject(dc, old);
+        return;
+    }
     const int top = in.top + titleH + Scale(12);
+    const int availW = in.right - in.left, availH = in.bottom - top;
+    // Smallest read-out width: "100%" in the mono font, plus a little air.
+    SelectObject(dc, MonoFont());
+    SIZE pctSz{};
+    GetTextExtentPoint32W(dc, L"100%", 4, &pctSz);
+    SelectObject(dc, old);
+    const int labelW = pctSz.cx + Scale(4), minBarH = Scale(28);
+
+    // Bars: try the usual row length, then fewer per row (more rows), until the labels fit.
+    // Two read-out lines (% and GHz) if there's room, else just %, else a heatmap.
+    heat_ = true;
+    int cols = 0, cellW = 0, cellH = 0, labelH = 0;
     const int gap = Scale(6);
-    const int cellW = (in.right - in.left - gap * (cols - 1)) / cols;
-    const int cellH = (in.bottom - top - gap * (rows - 1)) / rows;
-    const int labelH = Scale(30);
-    for (size_t i = 0; i < n; ++i) {
-        const int c = static_cast<int>(i) % cols, r = static_cast<int>(i) / cols;
-        const RECT cell{in.left + c * (cellW + gap), top + r * (cellH + gap), in.left + c * (cellW + gap) + cellW,
-                        top + r * (cellH + gap) + cellH};
-        bars_.push_back(RECT{cell.left, cell.top, cell.right, cell.bottom - labelH});
-        labels_.push_back(RECT{cell.left, cell.bottom - labelH + Scale(2), cell.right, cell.bottom});
+    for (int c = static_cast<int>(n <= 8 ? n : (n <= 16 ? 8 : (n <= 32 ? 16 : 32))); c >= 1 && heat_; c = c > 4 ? c / 2 : c - 1) {
+        const int rows = static_cast<int>((n + size_t(c) - 1) / size_t(c));
+        const int w = (availW - gap * (c - 1)) / c, h = (availH - gap * (rows - 1)) / rows;
+        if (w < labelW) continue;
+        for (int lh : {Scale(30), Scale(16)})
+            if (h - lh >= minBarH) {
+                heat_ = false;
+                cols = c, cellW = w, cellH = h, labelH = lh;
+                break;
+            }
+        if (n > 32 && c <= 8) break;  // that many threads as 8-wide bars would be a wall of rows
+    }
+    showGhz_ = labelH >= Scale(30);
+    if (!heat_) {
+        for (size_t i = 0; i < n; ++i) {
+            const int c = static_cast<int>(i) % cols, r = static_cast<int>(i) / cols;
+            const RECT cell{in.left + c * (cellW + gap), top + r * (cellH + gap), in.left + c * (cellW + gap) + cellW,
+                            top + r * (cellH + gap) + cellH};
+            bars_.push_back(RECT{cell.left, cell.top, cell.right, cell.bottom - labelH});
+            labels_.push_back(RECT{cell.left, cell.bottom - labelH + Scale(2), cell.right, cell.bottom});
+        }
+    } else {
+        // Heatmap: the column count that gives the biggest square tiles, centred.
+        const int tileGap = Scale(4);
+        int bestCols = 1, tile = 0;
+        for (int c = 1; c <= int(n); ++c) {
+            const int rows = static_cast<int>((n + size_t(c) - 1) / size_t(c));
+            const int t = std::min((availW - tileGap * (c - 1)) / c, (availH - tileGap * (rows - 1)) / rows);
+            if (t > tile) tile = t, bestCols = c;
+        }
+        tile = std::max(tile, 4);
+        const int rows = static_cast<int>((n + size_t(bestCols) - 1) / size_t(bestCols));
+        const int left = in.left + (availW - (bestCols * tile + (bestCols - 1) * tileGap)) / 2;
+        const int topY = top + (availH - (rows * tile + (rows - 1) * tileGap)) / 2;
+        for (size_t i = 0; i < n; ++i) {
+            const int c = static_cast<int>(i) % bestCols, r = static_cast<int>(i) / bestCols;
+            const int x = left + c * (tile + tileGap), y = topY + r * (tile + tileGap);
+            bars_.push_back(RECT{x, y, x + tile, y + tile});
+        }
+        return;  // tiles are drawn in PaintDynamic: their colour is the usage
     }
 
     Gdiplus::Graphics g(dc);
@@ -542,6 +620,32 @@ void CoreGrid::PaintDynamic(HDC dc, const RECT&) {
         spring(shownMhz_[i], velMhz_[i], double(cores_[i].mhz));
     }
 
+    if (heat_) {
+        // Each tile's colour runs from the empty-track shade to the CPU colour with its usage.
+        Gdiplus::Graphics g(dc);
+        g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+        SetBkMode(dc, TRANSPARENT);
+        HGDIOBJ oldFont = SelectObject(dc, MonoFont());
+        SIZE pctSz{};
+        GetTextExtentPoint32W(dc, L"100%", 4, &pctSz);
+        for (size_t i = 0; i < std::min(n, bars_.size()); ++i) {
+            const RECT& b = bars_[i];
+            const double u = std::clamp(shown_[i] / 100.0, 0.0, 1.0);
+            const Gdiplus::RectF r(float(b.left), float(b.top), float(b.right - b.left), float(b.bottom - b.top));
+            const float radius = std::min(ScaleF(5), r.Width / 4);
+            FillRoundRect(g, u > 0.005 ? Blend(g_pal.surface2, g_pal.cpu, 0.18 + 0.82 * u) : g_pal.surface2, r, radius);
+            if (int(i) == hover_) StrokeRoundRect(g, g_pal.text, r, radius, 1.5f);
+            if (b.right - b.left >= pctSz.cx + Scale(4) && b.bottom - b.top >= pctSz.cy) {  // number only if it fits
+                g.Flush();
+                RECT tr = b;
+                SetTextColor(dc, u > 0.55 ? g_pal.bg : g_pal.text);
+                const std::wstring pct = Format(L"%.0f%%", u * 100);
+                DrawTextW(dc, pct.c_str(), -1, &tr, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            }
+        }
+        SelectObject(dc, oldFont);
+        return;
+    }
     {
         Gdiplus::Graphics g(dc);
         g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
@@ -549,6 +653,7 @@ void CoreGrid::PaintDynamic(HDC dc, const RECT&) {
             const RECT& b = bars_[i];
             const Gdiplus::RectF track(float(b.left), float(b.top), float(b.right - b.left), float(b.bottom - b.top));
             if (track.Height < 4) continue;
+            if (int(i) == hover_) StrokeRoundRect(g, g_pal.text, track, ScaleF(5), 1.5f, 120);
             const float fillH = track.Height * float(std::clamp(shown_[i] / 100.0, 0.0, 1.0));
             if (fillH <= 1) continue;
             const Gdiplus::RectF fill(track.X, track.Y + track.Height - fillH, track.Width, fillH);
@@ -567,6 +672,7 @@ void CoreGrid::PaintDynamic(HDC dc, const RECT&) {
         SetTextColor(dc, g_pal.text);
         const std::wstring pct = Format(L"%.0f%%", std::clamp(shown_[i], 0.0, 100.0));
         DrawTextW(dc, pct.c_str(), -1, &label, DT_CENTER | DT_TOP | DT_SINGLELINE);
+        if (!showGhz_) continue;
         SetTextColor(dc, g_pal.textFaint);
         const std::wstring ghz = Format(L"%.2f", std::max(0.0, shownMhz_[i]) / 1000.0);
         label.top += Scale(14);

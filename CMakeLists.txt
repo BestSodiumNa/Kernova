@@ -48,6 +48,8 @@ add_library(kernova_core OBJECT
   src/page_input.cpp
   src/inputdev.cpp
   src/razer.cpp
+  src/mice.cpp
+  src/logitech.cpp
   src/page_devices.cpp
 )
 

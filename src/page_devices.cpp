@@ -1,11 +1,11 @@
 #include "graph.h"
 #include "page.h"
-#include "razer.h"
+#include "mice.h"
 #include "theme.h"
 
 #include <thread>
 
-// Mouse settings without vendor software: Razer mice over their control protocol, plus
+// Mouse settings without vendor software: Razer and Logitech mice over their own protocols, plus
 // Windows' own "Enhance pointer precision" (mouse acceleration).
 
 namespace mtm {
@@ -48,6 +48,10 @@ public:
               L"are saved inside the mouse and survive unplugging. If Synapse is running it may apply its own profile "
               L"over them. Tested on the DeathAdder V3 Pro; other Razer mice (such as the Viper family) use the same "
               L"protocol and are tried the same way, but a model may refuse some settings."},
+             {L"Logitech mice",
+              L"Read and set over HID++ 2.0, Logitech's published protocol (what G HUB and Options+ use). Not yet tried "
+              L"on real Logitech hardware. Mice in G HUB's onboard-memory mode may refuse changes or reapply their "
+              L"profile; 2000-8000 Hz Logitech models aren't supported yet."},
              {L"Polling rate",
               L"How often the mouse reports its position. 1000 Hz is the usual sweet spot; 2000-8000 Hz needs a mouse "
               L"and receiver that support it (Razer HyperPolling) and costs more CPU time and battery."},
@@ -117,7 +121,7 @@ private:
 
     // Optionally changes something first, then reads everything back so the cards show
     // what the mouse really has now (not what we asked for).
-    void Run(std::wstring busyText, std::function<DWORD(const RazerMouse&, const RazerState&)> change, std::wstring doneText) {
+    void Run(std::wstring busyText, std::function<DWORD(VendorMouse&, const MouseState&)> change, std::wstring doneText) {
         if (busy_) return;
         busy_ = true;
         UpdateButtons();
@@ -125,12 +129,12 @@ private:
         worker_ = std::jthread([this, change = std::move(change), doneText = std::move(doneText),
                                 mouse = mouse_, state = state_](std::stop_token) {
             DWORD err = ERROR_SUCCESS;
-            if (change) err = change(mouse, state);
-            std::vector<RazerMouse> mice = FindRazerMice();
-            RazerMouse found;
-            RazerState now;
-            for (const RazerMouse& m : mice) {
-                now = ReadRazer(m);
+            if (change && mouse) err = change(*mouse, state);
+            std::vector<std::shared_ptr<VendorMouse>> mice = FindVendorMice();
+            std::shared_ptr<VendorMouse> found;
+            MouseState now;
+            for (const auto& m : mice) {
+                now = m->Read();
                 found = m;
                 if (now.ok) break;
             }
@@ -142,33 +146,37 @@ private:
                 if (err == ERROR_NOT_SUPPORTED) SetText(status_, L"The mouse refused that setting (not supported by this model or receiver).");
                 else if (err != ERROR_SUCCESS) SetText(status_, L"Couldn't change it: " + ErrorText(err));
                 else if (!doneText.empty()) SetText(status_, doneText);
-                else if (!any) SetText(status_, L"No supported mouse found. Razer mice are supported so far; more brands to come.");
-                else if (!now.ok) SetText(status_, L"Found " + found.name + L", but it didn't answer. Wireless mice asleep or out of range don't reply; move it and press Refresh.");
-                else SetText(status_, found.name + L" · firmware " + now.firmware + L" · read directly from the mouse");
+                else if (!any) SetText(status_, L"No supported mouse found. Razer and Logitech mice are supported so far.");
+                else if (!now.ok) SetText(status_, L"Found " + found->Name() + L", but it didn't answer. Wireless mice asleep or out of range don't reply; move it and press Refresh.");
+                else SetText(status_, found->Name() + (now.firmware.empty() ? L"" : L" · firmware " + now.firmware) +
+                                          L" · read directly from the mouse" + (found->Tested() ? L"" : L" · untested brand: tell us if anything looks wrong"));
             });
         });
     }
 
     void Show() {
-        const RazerState& s = state_;
+        const MouseState& s = state_;
         const bool ok = s.ok;
+        const std::wstring name = mouse_ ? mouse_->Name() : L"";
         if (ok && s.wired)
-            battery_.SetText(L"Wired", mouse_.name, L"Powered by the cable, no battery");
-        else if (ok)
-            battery_.SetText(Format(L"%d%%", s.battery), mouse_.name,
+            battery_.SetText(L"Wired", name, L"Powered by the cable, no battery");
+        else if (ok && s.battery >= 0)
+            battery_.SetText(Format(s.batteryApprox ? L"≈%d%%" : L"%d%%", s.battery), name,
                              std::wstring(s.charging ? L"Charging over cable" : L"On battery") +
                                  (s.sleepSeconds ? Format(L" · sleeps after %d min idle", s.sleepSeconds / 60) : L""));
         else battery_.SetText(L"—", L"No mouse", L"");
-        poll_.SetText(ok && s.pollHz ? Format(L"%d Hz", s.pollHz) : L"—", ok ? L"Reports per second" : L"",
-                      ok ? (s.pollExtended ? L"Supports up to 8000 Hz with a HyperPolling receiver" : L"125 – 1000 Hz") : L"");
+        poll_.SetText(ok && s.pollHz ? Format(L"%d Hz", s.pollHz) : L"—", ok ? (s.note.empty() ? L"Reports per second" : s.note) : L"",
+                      ok && !s.pollChoices.empty() ? Format(L"%d – %d Hz", s.pollChoices.back(), s.pollChoices.front()) : L"");
         std::wstring stages;
         for (size_t i = 0; i < s.stages.size(); ++i)
             stages += (i ? L" · " : L"") + (int(i) == s.activeStage ? L"[" + std::to_wstring(s.stages[i]) + L"]" : std::to_wstring(s.stages[i]));
-        dpi_.SetText(ok && s.dpiX ? (s.dpiX == s.dpiY ? Format(L"%d", s.dpiX) : Format(L"%d × %d", s.dpiX, s.dpiY)) : L"—",
-                     ok ? L"Current sensitivity" : L"", stages.empty() ? L"" : L"Stages: " + stages);
+        dpi_.SetText(ok && s.dpi ? (s.dpiY ? Format(L"%d × %d", s.dpi, s.dpiY) : Format(L"%d", s.dpi)) : L"—",
+                     ok ? Format(L"Range %d – %d", s.dpiMin, s.dpiMax) : L"", stages.empty() ? L"" : L"Stages: " + stages);
+        const std::wstring cue = Format(L"Custom DPI (%d – %d)", s.dpiMin, s.dpiMax);
+        SendMessageW(dpiEdit_, EM_SETCUEBANNER, TRUE, reinterpret_cast<LPARAM>(cue.c_str()));
 
         SendMessageW(pollPick_, CB_RESETCONTENT, 0, 0);
-        pollChoices_ = ok ? RazerPollingChoices(s.pollExtended) : std::vector<int>{};
+        pollChoices_ = ok ? s.pollChoices : std::vector<int>{};
         for (int hz : pollChoices_) {
             const std::wstring label = Format(L"%d Hz", hz) + (hz == s.pollHz ? L"   ✓ current" : L"");
             SendMessageW(pollPick_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(label.c_str()));
@@ -220,25 +228,24 @@ private:
                                          L"HyperPolling). With a regular receiver the mouse may refuse or stay at 1000 Hz. "
                                          L"Higher rates also use more CPU time and battery.", hz)))
             return;
-        const bool ext = state_.pollExtended;
-        Run(L"Setting the polling rate…", [ext, hz](const RazerMouse& m, const RazerState&) { return RazerSetPolling(m, ext, hz); },
+        Run(L"Setting the polling rate…", [hz](VendorMouse& m, const MouseState& s) { return m.SetPolling(s, hz); },
             Format(L"Polling rate set to %d Hz. Check it on the Input tester page.", hz));
     }
 
     void ApplyStage() {
         const int sel = static_cast<int>(SendMessageW(stagePick_, CB_GETCURSEL, 0, 0));
         if (sel < 0 || sel == state_.activeStage) return;
-        Run(L"Switching DPI stage…", [sel](const RazerMouse& m, const RazerState& s) { return RazerSetActiveStage(m, s, sel); },
+        Run(L"Switching DPI stage…", [sel](VendorMouse& m, const MouseState& s) { return m.SetActiveStage(s, sel); },
             Format(L"Now on stage %d (%d DPI).", sel + 1, state_.stages[size_t(sel)]));
     }
 
     void ApplyDpi() {
         const int dpi = _wtoi(GetText(dpiEdit_).c_str());
-        if (dpi < 100 || dpi > 30000) {
-            SetText(status_, L"Enter a DPI between 100 and 30000.");
+        if (dpi < state_.dpiMin || dpi > state_.dpiMax) {
+            SetText(status_, Format(L"Enter a DPI between %d and %d.", state_.dpiMin, state_.dpiMax));
             return;
         }
-        Run(L"Setting DPI…", [dpi](const RazerMouse& m, const RazerState&) { return RazerSetDpi(m, dpi); },
+        Run(L"Setting DPI…", [dpi](VendorMouse& m, const MouseState&) { return m.SetDpi(dpi); },
             Format(L"DPI set to %d. The DPI button on the mouse still switches between its stages.", dpi));
     }
 
@@ -246,8 +253,8 @@ private:
          stageApply_ = nullptr, dpiEdit_ = nullptr, dpiApply_ = nullptr, pointerPick_ = nullptr, pointerApply_ = nullptr;
     ActionCard battery_, poll_, dpi_, pointer_;
     TextCard info_;
-    RazerMouse mouse_;
-    RazerState state_;
+    std::shared_ptr<VendorMouse> mouse_;
+    MouseState state_;
     std::vector<int> pollChoices_;
     bool busy_ = false;
     unsigned ticks_ = 0;
